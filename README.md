@@ -28,25 +28,67 @@ The current Flutter application includes:
 
 - [x] Flutter project setup
 - [x] Android device testing
-- [x] Custom Metro Line visual theme
-- [x] Custom typography
-- [x] Home screen
-- [x] Destination cards
-- [x] Destination search
-- [x] Local search filtering
-- [x] Navigation route screen
-- [x] Route visualization component
-- [x] Navigation between screens
-- [x] API service foundation
+- [x] Custom Metro Line visual theme and typography
+- [x] Search screen with category filters, quick access, and results grouped by building
+- [x] Start location picker (the place a QR scan will plug into)
+- [x] Route screen: overview (steps and map), guidance mode, arrival screen
+- [x] Metro-style route strip with interchange markers for stairs and lifts
+- [x] Interactive campus map (schematic, tappable buildings, route line)
+- [x] Floor selector and indoor floor plans (Academic Building, pilot)
+- [x] Multi-floor route visualization
+- [x] Loading, error, and empty states with retry
+- [x] API service with timeouts and a built-in demo mode
 - [x] Destination and route data models
-- [ ] Interactive campus map
-- [ ] Floor selector
-- [ ] Real campus data
-- [ ] Flask backend integration
-- [ ] Real A* route calculation
-- [ ] Real-time positioning
-- [ ] QR-based positioning
-- [ ] Multi-floor route visualization
+- [ ] Real campus data (GeoJSON, replacing the schematic map)
+- [ ] Flask backend integration (needs the real JSON contract)
+- [ ] QR scanning with the camera
+- [ ] Real-time positioning (guidance is simulated with a "Next step" button)
+
+## Running the app
+
+Demo mode (default). No backend needed, the app uses built-in campus data:
+
+```bash
+flutter pub get
+flutter run
+```
+
+Against the Flask backend:
+
+```bash
+flutter run --dart-define=USE_MOCK=false --dart-define=API_BASE_URL=http://<laptop-ip>:5000
+```
+
+- Emulator: use `http://10.0.2.2:5000`
+- Real phone: use your laptop's Wi-Fi IP, and keep both on the same network
+- Android blocks plain `http://` in release builds, so add HTTPS or a network security config before shipping
+
+## Backend contract the app expects
+
+`GET /api/search?q=` returns a list (an empty `q` returns everything):
+
+```json
+[{"id": "ai_lab", "name": "AI Lab", "building": "Academic Building", "floor": 2, "type": "lab"}]
+```
+
+`POST /api/route` with `{"start": "gate_main", "destination": "ai_lab"}` returns:
+
+```json
+{
+  "distance_meters": 170,
+  "estimated_minutes": 2.8,
+  "steps": [
+    {"type": "start", "title": "You are here", "instruction": "Main Gate", "floor": 0},
+    {"type": "walk", "title": "Walk straight", "instruction": "Walk 42 m to Main Junction", "distance": 42, "floor": 0},
+    {"type": "stairs", "title": "Take the stairs", "instruction": "Go up to floor 2", "distance": 20, "floor": 2},
+    {"type": "arrive", "title": "AI Lab", "instruction": "Your destination", "floor": 2}
+  ],
+  "path": [[500, 640], [500, 520]]
+}
+```
+
+Step `type` is one of: start, walk, turn_left, turn_right, enter, stairs, lift, arrive.
+The app also accepts `distance` / `duration` as alternative key names.
 
 ---
 

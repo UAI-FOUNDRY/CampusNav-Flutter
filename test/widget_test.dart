@@ -1,30 +1,31 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:campus_navigation/data/mock_campus.dart';
 import 'package:campus_navigation/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('route from the gate to the AI Lab walks, goes inside and takes the stairs', () {
+    final route = MockCampus.buildRoute(startId: 'gate_main', destinationId: 'ai_lab');
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(route.steps.first.type, 'start');
+    expect(route.steps.last.type, 'arrive');
+    expect(route.steps.any((s) => s.type == 'stairs'), isTrue);
+    expect(route.targetFloor, 2);
+    expect(route.distance, greaterThan(100));
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  test('starting at the destination building skips the outdoor walk', () {
+    final route = MockCampus.buildRoute(startId: 'acad_entrance', destinationId: 'library');
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(route.path.length, 1);
+    expect(route.steps.map((s) => s.type), ['start', 'enter', 'stairs', 'arrive']);
+  });
+
+  testWidgets('home screen loads the destinations', (tester) async {
+    await tester.pumpWidget(const CampusNavApp());
+    await tester.pump(const Duration(seconds: 1)); // wait for the mock delay
+
+    expect(find.text('Where to?'), findsOneWidget);
+    expect(find.text('Library'), findsWidgets);
   });
 }

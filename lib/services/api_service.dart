@@ -1,90 +1,103 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../data/mock_campus.dart';
 import '../models/destination.dart';
 import '../models/route.dart';
 
+/// An error with a message that is safe to show to the user.
+class ApiException implements Exception {
+  final String message;
+  const ApiException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+/// The only place in the app that talks to the backend.
+///
+/// Run against demo data (default):
+///   flutter run
+/// Run against Flask:
+///   flutter run --dart-define=USE_MOCK=false --dart-define=API_BASE_URL=http://192.168.1.10:5000
 class ApiService {
-  // ----------------------------------------------------------
-  // BACKEND BASE URL
-  // ----------------------------------------------------------
+  const ApiService();
 
-  // Temporary placeholder.
-  //
-  // Your backend teammate will eventually give you
-  // the actual URL.
-  static const String baseUrl = 'http://YOUR_BACKEND_URL';
+  /// 10.0.2.2 is how the Android emulator reaches your laptop.
+  /// On a real phone use your laptop's Wi-Fi IP address instead.
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://10.0.2.2:5000',
+  );
 
-  // ----------------------------------------------------------
-  // SEARCH DESTINATIONS
-  // ----------------------------------------------------------
+  static const bool useMock = bool.fromEnvironment('USE_MOCK', defaultValue: true);
 
-  Future<List<Destination>> searchDestinations(
-    String query,
-  ) async {
-    final uri = Uri.parse(
-      '$baseUrl/api/search?q=${Uri.encodeComponent(query)}',
-    );
+  static const Duration _timeout = Duration(seconds: 8);
 
-    final response = await http.get(uri);
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to search destinations: '
-        '${response.statusCode}',
-      );
+  /// GET /api/search?q=...   (an empty query returns every destination)
+  Future<List<Destination>> searchDestinations([String query = '']) async {
+    if (useMock) {
+      await Future.delayed(const Duration(milliseconds: 700));
+      return MockCampus.search(query);
     }
 
-    final data = jsonDecode(response.body);
+    final uri = Uri.parse('$baseUrl/api/search').replace(queryParameters: {'q': query});
+    final data = await _send(http.get(uri));
 
-    final List results = data as List;
-
-    return results
-        .map(
-          (item) => Destination.fromJson(
-            Map<String, dynamic>.from(item),
-          ),
-        )
+    // Accept either a plain list or {"results": [...]}.
+    final list = data is List
+        ? data
+        : (data is Map && data['results'] is List ? data['results'] as List : <dynamic>[]);
+    return list
+        .map((item) => Destination.fromJson(Map<String, dynamic>.from(item as Map)))
         .toList();
   }
 
-  // ----------------------------------------------------------
-  // GET ROUTE
-  // ----------------------------------------------------------
-
+  /// POST /api/route   {"start": "...", "destination": "..."}
   Future<NavigationRoute> getRoute({
     required String start,
     required String destination,
   }) async {
-    final uri = Uri.parse(
-      '$baseUrl/api/route',
-    );
-
-    final response = await http.post(
-      uri,
-
-      headers: {
-        'Content-Type': 'application/json',
-      },
-
-      body: jsonEncode({
-        'start': start,
-        'destination': destination,
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to get route: '
-        '${response.statusCode}',
-      );
+    if (useMock) {
+      await Future.delayed(const Duration(milliseconds: 800));
+      try {
+        return MockCampus.buildRoute(startId: start, destinationId: destination);
+      } on ArgumentError {
+        throw const ApiException('No walking route was found for that place.');
+      }
     }
 
-    final data = jsonDecode(response.body);
+    final uri = Uri.parse('$baseUrl/api/route');
+    final data = await _send(http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'start': start, 'destination': destination}),
+    ));
+    if (data is! Map) {
+      throw const ApiException('The server sent data the app could not read.');
+    }
+    return NavigationRoute.fromJson(Map<String, dynamic>.from(data));
+  }
 
-    return NavigationRoute.fromJson(
-      Map<String, dynamic>.from(data),
-    );
+  /// Runs a request with a timeout and turns every failure into an
+  /// [ApiException] the UI can show.
+  Future<dynamic> _send(Future<http.Response> request) async {
+    try {
+      final response = await request.timeout(_timeout);
+      if (response.statusCode != 200) {
+        throw ApiException('The server answered with an error (${response.statusCode}).');
+      }
+      return jsonDecode(response.body);
+    } on TimeoutException {
+      throw const ApiException('The server took too long to respond.');
+    } on ApiException {
+      rethrow;
+    } on FormatException {
+      throw const ApiException('The server sent data the app could not read.');
+    } catch (_) {
+      throw const ApiException('Could not reach the server. Check your connection.');
+    }
   }
 }

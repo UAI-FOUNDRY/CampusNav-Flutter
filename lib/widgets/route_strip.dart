@@ -1,136 +1,168 @@
 import 'package:flutter/material.dart';
+import '../models/route.dart';
 import '../theme/app_colors.dart';
+import '../theme/destination_style.dart';
+import 'pill.dart';
 
-class RouteStop {
-  final String title;
-  final String subtitle;
-  final String? distance;
-  final IconData icon;
-  final Color color;
-
-  const RouteStop({
-    required this.title,
-    required this.subtitle,
-    this.distance,
-    required this.icon,
-    required this.color,
-  });
-}
-
+/// The route drawn like a metro line: every step is a station on the line.
+///
+/// - Floor changes (stairs, lift) are "interchange" stations.
+/// - While navigating, pass [currentIndex]: earlier steps turn grey (done) and
+///   the current one gets a halo. Use -1 for a plain overview.
 class RouteStrip extends StatelessWidget {
-  final List<RouteStop> stops;
+  final List<RouteStep> steps;
+  final Color lineColor;
+  final int currentIndex;
 
   const RouteStrip({
     super.key,
-    required this.stops,
+    required this.steps,
+    required this.lineColor,
+    this.currentIndex = -1,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: EdgeInsets.zero,
-      itemCount: stops.length,
-      itemBuilder: (context, index) {
-        final stop = stops[index];
+    return Column(
+      children: [
+        for (var i = 0; i < steps.length; i++)
+          _StepRow(
+            step: steps[i],
+            isLast: i == steps.length - 1,
+            lineColor: lineColor,
+            done: currentIndex >= 0 && i < currentIndex,
+            current: i == currentIndex,
+          ),
+      ],
+    );
+  }
+}
 
-        final isLast = index == stops.length - 1;
+class _StepRow extends StatelessWidget {
+  final RouteStep step;
+  final bool isLast;
+  final Color lineColor;
+  final bool done;
+  final bool current;
 
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ==========================================
-            // METRO LINE
-            // ==========================================
+  const _StepRow({
+    required this.step,
+    required this.isLast,
+    required this.lineColor,
+    required this.done,
+    required this.current,
+  });
 
-            SizedBox(
-              width: 42,
+  static const Color _doneColor = Color(0xFFB8C0CE);
 
-              child: Column(
-                children: [
-                  Container(
-                    width: 26,
-                    height: 26,
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final accent = done ? _doneColor : lineColor;
+    final titleColor = done ? AppColors.inkMuted : AppColors.ink;
 
-                    decoration: BoxDecoration(
-                      color: stop.color,
-                      shape: BoxShape.circle,
-                    ),
-
-                    child: Icon(
-                      stop.icon,
-                      color: Colors.white,
-                      size: 15,
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 44,
+            child: Column(
+              children: [
+                _marker(accent),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 5,
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      decoration: BoxDecoration(
+                        color: accent,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
                     ),
                   ),
-
-                  if (!isLast)
-                    Container(
-                      width: 4,
-                      height: 65,
-                      color: stop.color,
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(top: 3, bottom: isLast ? 0 : 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        step.title,
+                        style: text.titleMedium?.copyWith(color: titleColor),
+                      ),
+                      if (step.isFloorChange && step.floor != null)
+                        Pill(text: floorLabel(step.floor!), color: lineColor),
+                    ],
+                  ),
+                  if (step.instruction.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      step.instruction,
+                      style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
                     ),
+                  ],
+                  if (step.distance != null && step.distance! > 0) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '${step.distance!.round()} m',
+                      style: text.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: done ? AppColors.inkMuted : lineInk(lineColor),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
 
-            const SizedBox(width: 12),
+  Widget _marker(Color accent) {
+    final isStart = step.type == 'start';
+    final isEnd = step.type == 'arrive';
+    final interchange = step.isFloorChange;
+    final size = (isEnd || interchange) ? 36.0 : 30.0;
 
-            // ==========================================
-            // STOP INFORMATION
-            // ==========================================
+    Color fill = Colors.white;
+    Color border = accent;
+    Color iconColor = done ? accent : lineInk(lineColor);
+    IconData icon = iconForStep(step.type);
 
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.only(
-                  bottom: 25,
-                ),
+    if (done) {
+      icon = Icons.check;
+    } else if (isStart || isEnd) {
+      fill = accent;
+      iconColor = readableOnLine(lineColor);
+    } else if (interchange) {
+      border = AppColors.ink;
+      iconColor = AppColors.ink;
+    }
 
-                child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
-
-                  children: [
-                    Text(
-                      stop.title,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium,
-                    ),
-
-                    const SizedBox(height: 3),
-
-                    Text(
-                      stop.subtitle,
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.copyWith(
-                            color: AppColors.inkMuted,
-                          ),
-                    ),
-
-                    if (stop.distance != null) ...[
-                      const SizedBox(height: 3),
-
-                      Text(
-                        stop.distance!,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(
-                              color: stop.color,
-                              fontWeight:
-                                  FontWeight.w600,
-                            ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: fill,
+        shape: BoxShape.circle,
+        border: Border.all(color: border, width: 3.5),
+        boxShadow: current
+            ? [BoxShadow(color: lineColor.withValues(alpha: 0.28), spreadRadius: 6)]
+            : null,
+      ),
+      child: Icon(icon, size: 17, color: iconColor),
     );
   }
 }
