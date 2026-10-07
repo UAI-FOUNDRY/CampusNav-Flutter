@@ -176,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Text('Quick access', style: text.titleMedium),
           const SizedBox(height: 12),
           SizedBox(
-            height: 108,
+            height: 120,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: quick.length,
