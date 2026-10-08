@@ -7,9 +7,11 @@ import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
 import '../widgets/destination_card.dart';
 import '../widgets/quick_tile.dart';
+import '../widgets/slide_route.dart';
 import '../widgets/start_location_sheet.dart';
 import '../widgets/state_views.dart';
 import 'navigation_screen.dart';
+import 'scan_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -68,9 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _open(Destination destination) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => NavigationScreen(destination: destination)),
-    );
+    Navigator.of(context).push(slideRoute(NavigationScreen(destination: destination)));
   }
 
   @override
@@ -82,7 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -99,9 +99,20 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
-                const _StartChip(),
+                IconButton.filledTonal(
+                  tooltip: 'Scan a QR code',
+                  icon: const Icon(Icons.qr_code_scanner),
+                  onPressed: () => openScanner(
+                    context,
+                    onManual: () => showStartLocationSheet(context),
+                  ),
+                ),
               ],
             ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: Align(alignment: Alignment.centerLeft, child: _StartChip()),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -138,10 +149,34 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          Expanded(child: _content(text)),
+          Expanded(
+            // Rebuild when saved places or recents change.
+            child: ListenableBuilder(
+              listenable: Listenable.merge([AppState.favorites, AppState.recents]),
+              builder: (context, _) => _content(text),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  /// Saved places first, then recent ones, then the defaults. Max six.
+  List<Destination> _quickList() {
+    final byId = {for (final d in _all) d.id: d};
+    final ids = <String>[
+      ...AppState.favorites.value,
+      ...AppState.recents.value,
+      for (final d in _all) d.id,
+    ];
+    final seen = <String>{};
+    final result = <Destination>[];
+    for (final id in ids) {
+      final d = byId[id];
+      if (d != null && seen.add(id)) result.add(d);
+      if (result.length == 6) break;
+    }
+    return result;
   }
 
   Widget _content(TextTheme text) {
@@ -167,55 +202,64 @@ class _HomeScreenState extends State<HomeScreen> {
     for (final d in results) {
       groups.putIfAbsent(d.building, () => []).add(d);
     }
-    final quick = _all.take(4).toList();
+    final quick = _quickList();
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-      children: [
-        if (!filtering && quick.isNotEmpty) ...[
-          Text('Quick access', style: text.titleMedium),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 120,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: quick.length,
-              separatorBuilder: (context, index) => const SizedBox(width: 12),
-              itemBuilder: (context, i) =>
-                  QuickTile(destination: quick[i], onTap: () => _open(quick[i])),
-            ),
-          ),
-          const SizedBox(height: 28),
-        ],
-        if (filtering)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(
-              '${results.length} ${results.length == 1 ? 'result' : 'results'}',
-              style: text.titleMedium,
-            ),
-          ),
-        if (results.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(top: 40),
-            child: EmptyView(
-              icon: Icons.search_off,
-              title: 'No destination found',
-              message: 'Try another name, or clear the filter.',
-            ),
-          )
-        else
-          for (final entry in groups.entries) ...[
-            _GroupHeader(building: entry.key, count: entry.value.length),
-            const SizedBox(height: 10),
-            for (final d in entry.value)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: DestinationCard(destination: d, onTap: () => _open(d)),
+    // Pull down to reload. AlwaysScrollable lets the pull work on short lists.
+    return RefreshIndicator(
+      onRefresh: _fetch,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+        children: [
+          if (!filtering && quick.isNotEmpty) ...[
+            Text('Quick access', style: text.titleMedium),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 120,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: quick.length,
+                separatorBuilder: (context, index) => const SizedBox(width: 12),
+                itemBuilder: (context, i) =>
+                    QuickTile(destination: quick[i], onTap: () => _open(quick[i])),
               ),
-            const SizedBox(height: 14),
+            ),
+            const SizedBox(height: 28),
           ],
-      ],
+          if (filtering)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                '${results.length} ${results.length == 1 ? 'result' : 'results'}',
+                style: text.titleMedium,
+              ),
+            ),
+          if (results.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 40),
+              child: EmptyView(
+                icon: Icons.search_off,
+                title: 'No destination found',
+                message: 'Try another name, or clear the filter.',
+              ),
+            )
+          else
+            for (final entry in groups.entries) ...[
+              _GroupHeader(building: entry.key, count: entry.value.length),
+              const SizedBox(height: 10),
+              for (final d in entry.value)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: DestinationCard(
+                    destination: d,
+                    highlight: _query,
+                    onTap: () => _open(d),
+                  ),
+                ),
+              const SizedBox(height: 14),
+            ],
+        ],
+      ),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/destination.dart';
+import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
 
@@ -37,7 +38,19 @@ class QuickTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(iconForType(destination.type), color: lineInk(line), size: 24),
+                      Row(
+                        children: [
+                          Icon(iconForType(destination.type), color: lineInk(line), size: 24),
+                          const Spacer(),
+                          ValueListenableBuilder<List<String>>(
+                            valueListenable: AppState.favorites,
+                            builder: (context, favorites, _) =>
+                                favorites.contains(destination.id)
+                                    ? const Icon(Icons.star, size: 16, color: AppColors.sports)
+                                    : const SizedBox.shrink(),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 10),
                       Text(
                         destination.name,

@@ -10,6 +10,7 @@ import '../widgets/floor_selector.dart';
 import '../widgets/map_frame.dart';
 import '../widgets/pill.dart';
 import '../widgets/segment_toggle.dart';
+import '../widgets/slide_route.dart';
 import '../widgets/state_views.dart';
 import 'navigation_screen.dart';
 
@@ -26,9 +27,7 @@ class _MapScreenState extends State<MapScreen> {
   int _floor = 0;
 
   void _openDestination(Destination destination) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => NavigationScreen(destination: destination)),
-    );
+    Navigator.of(context).push(slideRoute(NavigationScreen(destination: destination)));
   }
 
   /// Tapping a building on the outdoor map lists what is inside it.

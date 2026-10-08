@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/destination.dart';
+import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
+import 'highlight_text.dart';
 import 'pill.dart';
 
 /// One row in the destination list. The coloured stripe on the left is the
@@ -10,10 +12,14 @@ class DestinationCard extends StatelessWidget {
   final Destination destination;
   final VoidCallback onTap;
 
+  /// The current search text; matches are highlighted in the name.
+  final String highlight;
+
   const DestinationCard({
     super.key,
     required this.destination,
     required this.onTap,
+    this.highlight = '',
   });
 
   @override
@@ -47,7 +53,18 @@ class DestinationCard extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(destination.name, style: text.titleMedium),
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: HighlightText(
+                                      text: destination.name,
+                                      query: highlight,
+                                      style: text.titleMedium,
+                                    ),
+                                  ),
+                                  _SavedStar(id: destination.id),
+                                ],
+                              ),
                               const SizedBox(height: 2),
                               Text(
                                 destination.building,
@@ -67,6 +84,26 @@ class DestinationCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A small star next to the name when the place is saved.
+class _SavedStar extends StatelessWidget {
+  final String id;
+  const _SavedStar({required this.id});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<String>>(
+      valueListenable: AppState.favorites,
+      builder: (context, favorites, _) {
+        if (!favorites.contains(id)) return const SizedBox.shrink();
+        return const Padding(
+          padding: EdgeInsets.only(left: 6),
+          child: Icon(Icons.star, size: 16, color: AppColors.sports),
+        );
+      },
     );
   }
 }

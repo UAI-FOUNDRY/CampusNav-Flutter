@@ -55,15 +55,20 @@ class ApiService {
         .toList();
   }
 
-  /// POST /api/route   {"start": "...", "destination": "..."}
+  /// POST /api/route   {"start": "...", "destination": "...", "step_free": false}
   Future<NavigationRoute> getRoute({
     required String start,
     required String destination,
+    bool stepFree = false,
   }) async {
     if (useMock) {
       await Future.delayed(const Duration(milliseconds: 800));
       try {
-        return MockCampus.buildRoute(startId: start, destinationId: destination);
+        return MockCampus.buildRoute(
+          startId: start,
+          destinationId: destination,
+          stepFree: stepFree,
+        );
       } on ArgumentError {
         throw const ApiException('No walking route was found for that place.');
       }
@@ -73,7 +78,11 @@ class ApiService {
     final data = await _send(http.post(
       uri,
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'start': start, 'destination': destination}),
+      body: jsonEncode({
+        'start': start,
+        'destination': destination,
+        'step_free': stepFree,
+      }),
     ));
     if (data is! Map) {
       throw const ApiException('The server sent data the app could not read.');
@@ -81,15 +90,40 @@ class ApiService {
     return NavigationRoute.fromJson(Map<String, dynamic>.from(data));
   }
 
+  /// POST /api/report   {"start", "destination", "reason", "details"}
+  /// Lets a student say a route or location is wrong.
+  Future<void> reportProblem({
+    required String start,
+    required String destination,
+    required String reason,
+    String details = '',
+  }) async {
+    if (useMock) {
+      await Future.delayed(const Duration(milliseconds: 600));
+      return;
+    }
+    await _send(http.post(
+      Uri.parse('$baseUrl/api/report'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'start': start,
+        'destination': destination,
+        'reason': reason,
+        'details': details,
+      }),
+    ));
+  }
+
   /// Runs a request with a timeout and turns every failure into an
   /// [ApiException] the UI can show.
   Future<dynamic> _send(Future<http.Response> request) async {
     try {
       final response = await request.timeout(_timeout);
-      if (response.statusCode != 200) {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
         throw ApiException('The server answered with an error (${response.statusCode}).');
       }
-      return jsonDecode(response.body);
+      // Some endpoints (like /api/report) may answer with an empty body.
+      return response.body.isEmpty ? null : jsonDecode(response.body);
     } on TimeoutException {
       throw const ApiException('The server took too long to respond.');
     } on ApiException {

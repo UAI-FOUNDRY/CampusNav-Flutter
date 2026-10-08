@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../data/mock_campus.dart';
 import '../models/destination.dart';
 import '../models/route.dart';
@@ -15,6 +17,7 @@ import '../widgets/floor_plan.dart';
 import '../widgets/floor_selector.dart';
 import '../widgets/map_frame.dart';
 import '../widgets/pill.dart';
+import '../widgets/report_sheet.dart';
 import '../widgets/route_strip.dart';
 import '../widgets/segment_toggle.dart';
 import '../widgets/state_views.dart';
@@ -48,6 +51,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _arrived = false;
   int _stepIndex = 0;
 
+  // "Simulate walk": a timer that moves to the next step by itself.
+  Timer? _timer;
+  bool _simulating = false;
+
   Color get _line => lineColorForBuilding(widget.destination.building);
 
   @override
@@ -56,13 +63,21 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _fetch();
   }
 
+  @override
+  void dispose() {
+    _timer?.cancel(); // a running timer must be stopped when the screen closes
+    super.dispose();
+  }
+
   Future<void> _fetch() async {
     try {
       final route = await _api.getRoute(
         start: _start.id,
         destination: widget.destination.id,
+        stepFree: AppState.stepFree.value,
       );
       if (!mounted) return;
+      AppState.addRecent(widget.destination.id);
       setState(() {
         _route = route;
         _loading = false;
@@ -97,21 +112,46 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   void _next(NavigationRoute route) {
     if (_stepIndex >= route.steps.length - 1) {
+      HapticFeedback.mediumImpact();
       setState(() => _arrived = true);
     } else {
+      HapticFeedback.selectionClick();
       setState(() => _stepIndex++);
     }
   }
 
   void _previous() {
-    if (_stepIndex > 1) setState(() => _stepIndex--);
+    _stopSimulation();
+    if (_stepIndex > 1) {
+      HapticFeedback.selectionClick();
+      setState(() => _stepIndex--);
+    }
   }
 
   void _endGuidance() {
+    _stopSimulation();
     setState(() {
       _guiding = false;
       _stepIndex = 0;
     });
+  }
+
+  void _toggleSimulation(NavigationRoute route) {
+    if (_simulating) {
+      _stopSimulation();
+      return;
+    }
+    setState(() => _simulating = true);
+    _timer = Timer.periodic(const Duration(milliseconds: 2800), (timer) {
+      _next(route);
+      if (_arrived) _stopSimulation();
+    });
+  }
+
+  void _stopSimulation() {
+    _timer?.cancel();
+    _timer = null;
+    if (mounted && _simulating) setState(() => _simulating = false);
   }
 
   double _remainingMeters(NavigationRoute route) {
@@ -132,7 +172,33 @@ class _NavigationScreenState extends State<NavigationScreen> {
         actions: [
           if (_guiding && !_arrived)
             TextButton(onPressed: _endGuidance, child: const Text('End')),
-          const SizedBox(width: 8),
+          ValueListenableBuilder<List<String>>(
+            valueListenable: AppState.favorites,
+            builder: (context, favorites, _) {
+              final saved = favorites.contains(widget.destination.id);
+              return IconButton(
+                tooltip: saved ? 'Remove from saved' : 'Save this place',
+                icon: Icon(
+                  saved ? Icons.star : Icons.star_border,
+                  color: saved ? AppColors.sports : null,
+                ),
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  AppState.toggleFavorite(widget.destination.id);
+                },
+              );
+            },
+          ),
+          IconButton(
+            tooltip: 'Report a problem',
+            icon: const Icon(Icons.flag_outlined),
+            onPressed: () => showReportSheet(
+              context,
+              destination: widget.destination,
+              start: _start,
+            ),
+          ),
+          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(child: _body()),
@@ -200,6 +266,40 @@ class _NavigationScreenState extends State<NavigationScreen> {
           Pill(text: floorLabel(d.floor), color: _line, icon: Icons.layers_outlined),
         ],
       ),
+      if (d.floor > 0) ...[
+        const SizedBox(height: 16),
+        AppCard(
+          padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.accessible, color: AppColors.inkMuted),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Step-free route', style: text.titleMedium),
+                    Text(
+                      'Use the lift instead of stairs',
+                      style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                    ),
+                  ],
+                ),
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: AppState.stepFree,
+                builder: (context, value, _) => Switch(
+                  value: value,
+                  onChanged: (v) {
+                    AppState.setStepFree(v);
+                    _retry(); // ask for a new route
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
       const SizedBox(height: 22),
       SegmentToggle(
         labels: const ['Steps', 'Map'],
@@ -283,7 +383,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Text('${remaining.round()}', style: text.displaySmall),
+          // The number counts down smoothly instead of jumping.
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: remaining),
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeOut,
+            builder: (context, value, _) =>
+                Text('${value.round()}', style: text.displaySmall),
+          ),
           const SizedBox(width: 4),
           Text('m left', style: text.titleMedium?.copyWith(color: AppColors.inkMuted)),
         ],
@@ -291,21 +398,51 @@ class _NavigationScreenState extends State<NavigationScreen> {
       const SizedBox(height: 12),
       ClipRRect(
         borderRadius: BorderRadius.circular(6),
-        child: LinearProgressIndicator(
-          value: progress,
-          minHeight: 8,
-          color: _line,
-          backgroundColor: AppColors.mist,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: progress),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
+          builder: (context, value, _) => LinearProgressIndicator(
+            value: value,
+            minHeight: 8,
+            color: _line,
+            backgroundColor: AppColors.mist,
+          ),
         ),
       ),
       const SizedBox(height: 20),
-      _CurrentStepCard(
-        step: step,
-        line: _line,
-        index: _stepIndex,
-        total: route.steps.length - 1,
+      // The key changes with every step, so AnimatedSwitcher slides the old
+      // card out and the new one in.
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 320),
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.12, 0),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        child: _CurrentStepCard(
+          key: ValueKey(_stepIndex),
+          step: step,
+          line: _line,
+          index: _stepIndex,
+          total: route.steps.length - 1,
+        ),
       ),
-      const SizedBox(height: 28),
+      const SizedBox(height: 8),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: () => _toggleSimulation(route),
+          icon: Icon(_simulating ? Icons.pause_circle_outline : Icons.play_circle_outline),
+          label: Text(_simulating ? 'Pause simulation' : 'Simulate walk'),
+        ),
+      ),
+      const SizedBox(height: 16),
       Text('Whole route', style: text.titleMedium),
       const SizedBox(height: 16),
       RouteStrip(steps: route.steps, lineColor: _line, currentIndex: _stepIndex),
@@ -343,7 +480,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 Expanded(
                   child: FilledButton(
                     style: buttonStyle,
-                    onPressed: () => _next(route),
+                    onPressed: () {
+                      _stopSimulation();
+                      _next(route);
+                    },
                     child: Text(atEnd ? "I've arrived" : 'Next step'),
                   ),
                 ),
@@ -367,6 +507,7 @@ class _CurrentStepCard extends StatelessWidget {
   final int total;
 
   const _CurrentStepCard({
+    super.key,
     required this.step,
     required this.line,
     required this.index,

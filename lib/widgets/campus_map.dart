@@ -38,13 +38,21 @@ class CampusMap extends StatelessWidget {
             Positioned.fill(child: CustomPaint(painter: _RoadsPainter(s))),
             if (routePath.length > 1)
               Positioned.fill(
-                child: CustomPaint(
-                  painter: RoutePainter(
-                    points: routePath,
-                    scale: s,
-                    color: routeColor,
-                    strokeWidth: 6,
-                    dots: true,
+                // TweenAnimationBuilder runs 0 -> 1 once, so the route
+                // draws itself from the start to the destination.
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween<double>(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 1500),
+                  curve: Curves.easeInOut,
+                  builder: (context, t, _) => CustomPaint(
+                    painter: RoutePainter(
+                      points: routePath,
+                      scale: s,
+                      color: routeColor,
+                      strokeWidth: 6,
+                      dots: true,
+                      progress: t,
+                    ),
                   ),
                 ),
               ),
@@ -93,7 +101,17 @@ class CampusMap extends StatelessWidget {
               Positioned(
                 left: end.x * s - 16,
                 top: end.y * s - 32,
-                child: Icon(Icons.location_on, size: 32, color: routeColor),
+                // The pin drops in as the line finishes drawing.
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween<double>(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 1500),
+                  curve: const Interval(0.8, 1, curve: Curves.easeOut),
+                  builder: (context, t, child) => Opacity(
+                    opacity: t,
+                    child: Transform.translate(offset: Offset(0, -14 * (1 - t)), child: child),
+                  ),
+                  child: Icon(Icons.location_on, size: 32, color: routeColor),
+                ),
               ),
           ],
         );

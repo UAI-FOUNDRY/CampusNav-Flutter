@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import '../data/mock_campus.dart';
 import '../models/start_point.dart';
+import '../screens/scan_screen.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import 'app_card.dart';
 
 /// Lets the user say where they are. Scanning a QR code will call the same
-/// `AppState.startPoint.value = ...` later.
+/// `AppState.setStart(...)` later.
 Future<void> showStartLocationSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
@@ -36,6 +37,49 @@ class _StartLocationSheet extends StatelessWidget {
               style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
             ),
             const SizedBox(height: 16),
+            AppCard(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              onTap: () {
+                // Close this sheet, then open the scanner. The navigator's
+                // own context stays valid after the sheet is gone.
+                final navigator = Navigator.of(context);
+                navigator.pop();
+                openScanner(
+                  navigator.context,
+                  onManual: () => showStartLocationSheet(navigator.context),
+                );
+              },
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.academic.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.qr_code_scanner, color: AppColors.academic),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Scan a QR code', style: text.titleMedium),
+                        Text(
+                          'Fastest: scan the code on the nearest signboard',
+                          style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, color: AppColors.inkMuted),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text('Or pick a landmark', style: text.titleMedium),
+            const SizedBox(height: 12),
             ValueListenableBuilder<StartPoint>(
               valueListenable: AppState.startPoint,
               builder: (context, current, _) {
@@ -70,7 +114,7 @@ class _StartTile extends StatelessWidget {
     return AppCard(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       onTap: () {
-        AppState.startPoint.value = point;
+        AppState.setStart(point);
         Navigator.of(context).pop();
       },
       child: Row(

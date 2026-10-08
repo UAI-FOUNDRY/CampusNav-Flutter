@@ -226,6 +226,22 @@ class MockCampus {
     return null;
   }
 
+  /// Turns the text inside a QR code into a start point.
+  /// Accepts "campusnav:<node id>" or just "<node id>". Returns null for
+  /// codes that are not from this campus.
+  static StartPoint? startPointFromCode(String raw) {
+    var id = raw.trim();
+    if (id.startsWith('campusnav:')) id = id.substring('campusnav:'.length);
+
+    for (final p in startPoints) {
+      if (p.id == id) return p;
+    }
+    for (final n in nodes) {
+      if (n.id == id) return StartPoint(id: n.id, name: n.name, hint: 'From a QR code');
+    }
+    return null;
+  }
+
   static List<Destination> search(String query) =>
       destinations.where((d) => d.matches(query)).toList();
 
@@ -297,6 +313,7 @@ class MockCampus {
   static NavigationRoute buildRoute({
     required String startId,
     required String destinationId,
+    bool stepFree = false,
   }) {
     final destination = destinations.firstWhere(
       (d) => d.id == destinationId,
@@ -365,7 +382,7 @@ class MockCampus {
     total += 12;
 
     if (destination.floor > 0) {
-      final useLift = destination.floor >= 3;
+      final useLift = stepFree || destination.floor >= 3;
       final climb = 8.0 + destination.floor * 6;
       steps.add(RouteStep(
         type: useLift ? 'lift' : 'stairs',

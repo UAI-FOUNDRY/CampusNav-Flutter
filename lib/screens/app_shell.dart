@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../state/app_state.dart';
+import '../widgets/start_location_sheet.dart';
 import 'home_screen.dart';
 import 'map_screen.dart';
 
@@ -12,6 +14,23 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // First launch: ask where the user is before they search anything.
+    if (AppState.firstRun) {
+      AppState.firstRun = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        showStartLocationSheet(context).then((_) {
+          // Remember the choice (or the default if they just closed the sheet)
+          // so we don't ask again.
+          AppState.setStart(AppState.startPoint.value);
+        });
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

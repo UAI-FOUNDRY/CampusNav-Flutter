@@ -106,8 +106,21 @@ class FloorPlan extends StatelessWidget {
               ),
             if (points.length > 1)
               Positioned.fill(
-                child: CustomPaint(
-                  painter: RoutePainter(points: points, scale: s, color: color, strokeWidth: 5),
+                // The key restarts the animation whenever the floor changes.
+                child: TweenAnimationBuilder<double>(
+                  key: ValueKey(floor),
+                  tween: Tween<double>(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 900),
+                  curve: Curves.easeInOut,
+                  builder: (context, t, _) => CustomPaint(
+                    painter: RoutePainter(
+                      points: points,
+                      scale: s,
+                      color: color,
+                      strokeWidth: 5,
+                      progress: t,
+                    ),
+                  ),
                 ),
               ),
             if (floor == 0)

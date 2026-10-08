@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'screens/app_shell.dart';
+import 'state/app_state.dart';
 import 'theme/app_theme.dart';
 
-void main() => runApp(const CampusNavApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppState.load(); // read saved places and settings before the first screen
+  runApp(const CampusNavApp());
+}
 
 class CampusNavApp extends StatelessWidget {
   const CampusNavApp({super.key});
