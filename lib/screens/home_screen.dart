@@ -81,58 +81,49 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // "From" and "to" as two stations on one line: the first field is
+          // where you are, the second is where you want to go.
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const SizedBox(
+                  width: 28,
+                  height: 126, // 56 + 14 + 56: the two fields and the gap
+                  child: CustomPaint(painter: _JourneyRailPainter()),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Campus Navigation',
-                        style: text.titleMedium?.copyWith(color: AppColors.inkMuted),
+                      const _SourceField(),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        height: 56,
+                        child: TextField(
+                          controller: _controller,
+                          textInputAction: TextInputAction.search,
+                          onChanged: (value) => setState(() => _query = value),
+                          decoration: InputDecoration(
+                            hintText: 'Where do you want to go?',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: _query.isEmpty
+                                ? null
+                                : IconButton(
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () {
+                                      _controller.clear(); // clears the text in the box
+                                      setState(() => _query = ''); // and our copy of it
+                                    },
+                                  ),
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 2),
-                      Text('Where to?', style: text.headlineSmall),
                     ],
                   ),
                 ),
-                IconButton.filledTonal(
-                  tooltip: 'Scan a QR code',
-                  icon: const Icon(Icons.qr_code_scanner),
-                  onPressed: () => openScanner(
-                    context,
-                    onManual: () => showStartLocationSheet(context),
-                  ),
-                ),
               ],
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
-            child: Align(alignment: Alignment.centerLeft, child: _StartChip()),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: TextField(
-              controller: _controller,
-              textInputAction: TextInputAction.search,
-              onChanged: (value) => setState(() => _query = value),
-              decoration: InputDecoration(
-                hintText: 'Search rooms, labs, facilities',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () {
-                          _controller.clear(); // clears the text in the box
-                          setState(() => _query = ''); // and our copy of it
-                        },
-                      ),
-              ),
             ),
           ),
           SizedBox(
@@ -264,39 +255,71 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// "From: Main Gate" pill. Opens the start-location sheet.
-class _StartChip extends StatelessWidget {
-  const _StartChip();
+/// The "from" field: shows where you are, and lets you change it by tapping
+/// the field or scanning a QR code.
+class _SourceField extends StatelessWidget {
+  const _SourceField();
 
   @override
   Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+
     return ValueListenableBuilder<StartPoint>(
       valueListenable: AppState.startPoint,
       builder: (context, start, _) {
-        return Material(
-          color: Colors.white,
-          shape: const StadiumBorder(side: BorderSide(color: AppColors.mist)),
-          child: InkWell(
-            customBorder: const StadiumBorder(),
-            onTap: () => showStartLocationSheet(context),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.my_location, size: 16, color: AppColors.academic),
-                  const SizedBox(width: 6),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 110),
-                    child: Text(
-                      start.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        return SizedBox(
+          height: 56,
+          child: Material(
+            color: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: const BorderSide(color: AppColors.mist),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => showStartLocationSheet(context),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 16, right: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Where are you now?',
+                            style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                          ),
+                          Text(
+                            start.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: text.titleMedium,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const Icon(Icons.expand_more, size: 18),
-                ],
+                    const Text(
+                      'Change',
+                      style: TextStyle(
+                        color: AppColors.academic,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: 'Scan a QR code',
+                      color: AppColors.academic,
+                      icon: const Icon(Icons.qr_code_scanner),
+                      onPressed: () => openScanner(
+                        context,
+                        onManual: () => showStartLocationSheet(context),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -304,6 +327,49 @@ class _StartChip extends StatelessWidget {
       },
     );
   }
+}
+
+/// A blue line joining two stations: you (hollow) and your destination (solid).
+class _JourneyRailPainter extends CustomPainter {
+  const _JourneyRailPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final x = size.width / 2;
+    const top = 28.0; // centre of the first field
+    final bottom = size.height - 28; // centre of the second field
+
+    canvas.drawLine(
+      Offset(x, top),
+      Offset(x, bottom),
+      Paint()
+        ..color = AppColors.academic
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // Start: white dot with a blue ring.
+    canvas.drawCircle(Offset(x, top), 9, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      Offset(x, top),
+      9,
+      Paint()
+        ..color = AppColors.academic
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4,
+    );
+
+    // Destination: solid dot with a soft halo.
+    canvas.drawCircle(
+      Offset(x, bottom),
+      14,
+      Paint()..color = AppColors.academic.withValues(alpha: 0.18),
+    );
+    canvas.drawCircle(Offset(x, bottom), 8, Paint()..color = AppColors.academic);
+  }
+
+  @override
+  bool shouldRepaint(_JourneyRailPainter old) => false;
 }
 
 class _CategoryChip extends StatelessWidget {

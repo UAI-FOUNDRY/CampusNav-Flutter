@@ -42,7 +42,7 @@ void main() {
     await tester.pumpWidget(const CampusNavApp());
     await tester.pump(const Duration(seconds: 1)); // wait for the mock delay
 
-    expect(find.text('Where to?'), findsOneWidget);
+    expect(find.text('Where are you now?'), findsOneWidget);
     expect(find.text('Library'), findsWidgets);
   });
 }
