@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import '../data/mock_campus.dart';
 import '../models/destination.dart';
 import '../models/start_point.dart';
 import '../services/api_service.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
+import '../widgets/app_card.dart';
 import '../widgets/destination_card.dart';
+import '../widgets/pill.dart';
 import '../widgets/quick_tile.dart';
 import '../widgets/slide_route.dart';
 import '../widgets/start_location_sheet.dart';
@@ -25,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _controller = TextEditingController(); // owns the text in the search box
 
   List<Destination> _all = const [];
+  Map<String, int> _minutes = const {}; // walking minutes from the user's location
   bool _loading = true;
   String? _error;
   String _query = '';
@@ -33,13 +37,39 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    AppState.startPoint.addListener(_onStartChanged);
     _fetch();
   }
 
   @override
   void dispose() {
+    AppState.startPoint.removeListener(_onStartChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  /// The user moved (changed or scanned a start): walking times are stale.
+  void _onStartChanged() {
+    if (_all.isEmpty) return;
+    setState(() => _minutes = const {}); // hide the old times right away
+    _loadEstimates();
+  }
+
+  /// Walking minutes to every destination, in a single request.
+  Future<void> _loadEstimates() async {
+    final start = AppState.startPoint.value;
+    try {
+      final result = await _api.getEstimates(
+        start: start.id,
+        destinations: [for (final d in _all) d.id],
+      );
+      // Ignore the answer if the user has moved again in the meantime.
+      if (!mounted || start.id != AppState.startPoint.value.id) return;
+      setState(() => _minutes = result);
+    } on ApiException {
+      // Walking times are an extra: the list works without them.
+      if (mounted) setState(() => _minutes = const {});
+    }
   }
 
   /// Loads every destination once. Filtering while typing happens locally.
@@ -52,6 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
         _error = null;
       });
+      _loadEstimates();
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -69,8 +100,10 @@ class _HomeScreenState extends State<HomeScreen> {
     _fetch();
   }
 
-  void _open(Destination destination) {
-    Navigator.of(context).push(slideRoute(NavigationScreen(destination: destination)));
+  void _open(Destination destination, {StartPoint? start}) {
+    Navigator.of(context).push(
+      slideRoute(NavigationScreen(destination: destination, start: start)),
+    );
   }
 
   @override
@@ -143,7 +176,11 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             // Rebuild when saved places or recents change.
             child: ListenableBuilder(
-              listenable: Listenable.merge([AppState.favorites, AppState.recents]),
+              listenable: Listenable.merge([
+                AppState.favorites,
+                AppState.recents,
+                AppState.trips,
+              ]),
               builder: (context, _) => _content(text),
             ),
           ),
@@ -168,6 +205,46 @@ class _HomeScreenState extends State<HomeScreen> {
       if (result.length == 6) break;
     }
     return result;
+  }
+
+  /// Up to three recent trips. Tapping one repeats it from its own start.
+  List<Widget> _recentTrips(TextTheme text) {
+    final byId = {for (final d in _all) d.id: d};
+    final current = AppState.startPoint.value;
+    final rows = <Widget>[];
+
+    for (final trip in AppState.trips.value) {
+      final parts = trip.split('>');
+      if (parts.length != 2) continue;
+      final destination = byId[parts[1]];
+      final from = MockCampus.startPointFromCode(parts[0]);
+      if (destination == null || from == null) continue;
+
+      rows.add(Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: _TripRow(
+          from: from,
+          destination: destination,
+          // Walking time is only known from where you are now.
+          minutes: from.id == current.id ? _minutes[destination.id] : null,
+          onTap: () => _open(destination, start: from),
+        ),
+      ));
+      if (rows.length == 3) break;
+    }
+    if (rows.isEmpty) return const [];
+
+    return [
+      Row(
+        children: [
+          Expanded(child: Text('Recent trips', style: text.titleMedium)),
+          TextButton(onPressed: AppState.clearTrips, child: const Text('Clear')),
+        ],
+      ),
+      const SizedBox(height: 4),
+      ...rows,
+      const SizedBox(height: 18),
+    ];
   }
 
   Widget _content(TextTheme text) {
@@ -206,17 +283,22 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Quick access', style: text.titleMedium),
             const SizedBox(height: 12),
             SizedBox(
-              height: 120,
+              height: 136,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: quick.length,
                 separatorBuilder: (context, index) => const SizedBox(width: 12),
                 itemBuilder: (context, i) =>
-                    QuickTile(destination: quick[i], onTap: () => _open(quick[i])),
+                    QuickTile(
+                  destination: quick[i],
+                  minutes: _minutes[quick[i].id],
+                  onTap: () => _open(quick[i]),
+                ),
               ),
             ),
             const SizedBox(height: 28),
           ],
+          if (!filtering) ..._recentTrips(text),
           if (filtering)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -370,6 +452,61 @@ class _JourneyRailPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_JourneyRailPainter old) => false;
+}
+
+/// One recent trip: "Main Gate to AI Lab", with the walking time if known.
+class _TripRow extends StatelessWidget {
+  final StartPoint from;
+  final Destination destination;
+  final int? minutes;
+  final VoidCallback onTap;
+
+  const _TripRow({
+    required this.from,
+    required this.destination,
+    required this.minutes,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final line = lineColorForBuilding(destination.building);
+
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      onTap: onTap,
+      child: Row(
+        children: [
+          const Icon(Icons.history, color: AppColors.inkMuted),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${from.name} to ${destination.name}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.titleMedium,
+                ),
+                Text(
+                  '${destination.building}, ${floorLabel(destination.floor)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                ),
+              ],
+            ),
+          ),
+          if (minutes != null) ...[
+            const SizedBox(width: 8),
+            Pill(text: '$minutes min', color: line, icon: Icons.directions_walk),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _CategoryChip extends StatelessWidget {

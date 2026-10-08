@@ -29,7 +29,11 @@ import '../widgets/state_views.dart';
 class NavigationScreen extends StatefulWidget {
   final Destination destination;
 
-  const NavigationScreen({super.key, required this.destination});
+  /// Where the trip starts. Defaults to the user's current location; "Recent
+  /// trips" passes the trip's own start.
+  final StartPoint? start;
+
+  const NavigationScreen({super.key, required this.destination, this.start});
 
   @override
   State<NavigationScreen> createState() => _NavigationScreenState();
@@ -39,7 +43,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final _api = const ApiService();
 
   // Where the user was when they opened this screen.
-  late final StartPoint _start = AppState.startPoint.value;
+  late final StartPoint _start = widget.start ?? AppState.startPoint.value;
 
   NavigationRoute? _route;
   String? _error;
@@ -78,6 +82,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       );
       if (!mounted) return;
       AppState.addRecent(widget.destination.id);
+      AppState.addTrip(_start.id, widget.destination.id);
       setState(() {
         _route = route;
         _loading = false;

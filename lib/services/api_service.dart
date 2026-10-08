@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
@@ -88,6 +89,43 @@ class ApiService {
       throw const ApiException('The server sent data the app could not read.');
     }
     return NavigationRoute.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  /// POST /api/estimates   {"start": "...", "destinations": ["id", ...]}
+  /// Answers {"estimates": {"library": 2, "ai_lab": 3}} (walking minutes).
+  /// Used for the "2 min walk" labels. Places with no route are left out.
+  Future<Map<String, int>> getEstimates({
+    required String start,
+    required List<String> destinations,
+  }) async {
+    if (useMock) {
+      await Future.delayed(const Duration(milliseconds: 250));
+      final result = <String, int>{};
+      for (final id in destinations) {
+        try {
+          final route = MockCampus.buildRoute(startId: start, destinationId: id);
+          result[id] = math.max(1, route.minutes.round());
+        } on ArgumentError {
+          // No route to this place: leave it out.
+        }
+      }
+      return result;
+    }
+
+    final data = await _send(http.post(
+      Uri.parse('$baseUrl/api/estimates'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'start': start, 'destinations': destinations}),
+    ));
+    final raw = data is Map ? (data['estimates'] ?? data) : null;
+    if (raw is! Map) {
+      throw const ApiException('The server sent data the app could not read.');
+    }
+    return {
+      for (final entry in raw.entries)
+        entry.key.toString():
+            math.max(1, (double.tryParse(entry.value.toString()) ?? 1).round()),
+    };
   }
 
   /// POST /api/report   {"start", "destination", "reason", "details"}

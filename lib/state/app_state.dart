@@ -19,6 +19,10 @@ class AppState {
   static final ValueNotifier<List<String>> recents =
       ValueNotifier<List<String>>(const []);
 
+  /// Recent trips as "startId>destinationId", most recent first.
+  static final ValueNotifier<List<String>> trips =
+      ValueNotifier<List<String>>(const []);
+
   /// True until the user has chosen a start location once.
   static bool firstRun = false;
 
@@ -30,6 +34,7 @@ class AppState {
     _prefs = prefs;
     favorites.value = prefs.getStringList('favorites') ?? const [];
     recents.value = prefs.getStringList('recents') ?? const [];
+    trips.value = prefs.getStringList('trips') ?? const [];
     stepFree.value = prefs.getBool('stepFree') ?? false;
 
     final startId = prefs.getString('startId');
@@ -61,6 +66,21 @@ class AppState {
     }
     favorites.value = list;
     _prefs?.setStringList('favorites', list);
+  }
+
+  /// Remembers a trip so it can be repeated in one tap. Keeps the last five.
+  static void addTrip(String startId, String destinationId) {
+    final trip = '$startId>$destinationId';
+    final list = [...trips.value]..remove(trip);
+    list.insert(0, trip);
+    if (list.length > 5) list.removeRange(5, list.length);
+    trips.value = list;
+    _prefs?.setStringList('trips', list);
+  }
+
+  static void clearTrips() {
+    trips.value = const [];
+    _prefs?.remove('trips');
   }
 
   /// Most recent first, no duplicates, at most six.

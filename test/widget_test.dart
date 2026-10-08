@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:campus_navigation/data/mock_campus.dart';
+import 'package:campus_navigation/services/api_service.dart';
 import 'package:campus_navigation/main.dart';
 
 void main() {
@@ -36,6 +37,17 @@ void main() {
     expect(MockCampus.startPointFromCode('campusnav:acad_entrance')?.name, 'Academic Building');
     expect(MockCampus.startPointFromCode('north_junction')?.name, 'North Junction');
     expect(MockCampus.startPointFromCode('https://example.com'), isNull);
+  });
+
+  test('walking time estimates cover every reachable destination', () async {
+    final estimates = await const ApiService().getEstimates(
+      start: 'gate_main',
+      destinations: ['library', 'ai_lab', 'nope'],
+    );
+
+    expect(estimates.keys, containsAll(['library', 'ai_lab']));
+    expect(estimates.containsKey('nope'), isFalse);
+    expect(estimates['library'], greaterThanOrEqualTo(1));
   });
 
   testWidgets('home screen loads the destinations', (tester) async {
