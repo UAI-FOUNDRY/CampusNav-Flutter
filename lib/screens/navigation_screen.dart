@@ -15,6 +15,8 @@ import '../widgets/app_card.dart';
 import '../widgets/campus_map.dart';
 import '../widgets/floor_plan.dart';
 import '../widgets/floor_selector.dart';
+import '../widgets/live_floor_plan.dart';
+import '../widgets/live_route_map.dart';
 import '../widgets/map_frame.dart';
 import '../widgets/pill.dart';
 import '../widgets/report_sheet.dart';
@@ -79,6 +81,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         start: _start.id,
         destination: widget.destination.id,
         stepFree: AppState.stepFree.value,
+        startName: _start.name,
       );
       if (!mounted) return;
       AppState.addRecent(widget.destination.id);
@@ -319,7 +322,44 @@ class _NavigationScreenState extends State<NavigationScreen> {
     ];
   }
 
+  /// Map tab for a route from the real backend: the outdoor line on
+  /// OpenStreetMap, then one floor plan per indoor leg.
+  List<Widget> _liveMapContent(NavigationRoute route, TextTheme text) {
+    final outdoor = route.outdoorPolyline;
+    final indoor = route.indoorLegs;
+
+    return [
+      if (outdoor.length > 1) ...[
+        Text('Outside', style: text.titleMedium),
+        const SizedBox(height: 12),
+        LiveCampusMap(route: outdoor, color: _line),
+        const SizedBox(height: 22),
+      ],
+      for (final leg in indoor) ...[
+        Text('Inside, ${floorLabel(leg.floor).toLowerCase()}', style: text.titleMedium),
+        const SizedBox(height: 12),
+        MapFrame(
+          aspectRatio: leg.imageWidth / leg.imageHeight,
+          zoomable: true,
+          child: LiveFloorPlan(
+            image: leg.image!,
+            imageWidth: leg.imageWidth,
+            imageHeight: leg.imageHeight,
+            route: leg.points,
+            color: _line,
+          ),
+        ),
+        const SizedBox(height: 22),
+      ],
+      if (outdoor.length <= 1 && indoor.isEmpty)
+        AppCard(
+          child: Text('There is no map for this route yet. Follow the steps.', style: text.bodyMedium),
+        ),
+    ];
+  }
+
   List<Widget> _mapContent(NavigationRoute route, TextTheme text) {
+    if (!ApiService.useMock) return _liveMapContent(route, text);
     final building = MockCampus.buildingNamed(widget.destination.building);
     final plan = MockCampus.floorPlans[widget.destination.building];
     final target = route.targetFloor ?? widget.destination.floor;

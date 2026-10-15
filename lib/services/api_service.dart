@@ -37,30 +37,37 @@ class ApiService {
 
   static const Duration _timeout = Duration(seconds: 8);
 
-  /// GET /api/search?q=...   (an empty query returns every destination)
+  /// GET /api/rooms?q=...   (an empty query returns every place)
   Future<List<Destination>> searchDestinations([String query = '']) async {
     if (useMock) {
       await Future.delayed(const Duration(milliseconds: 700));
       return MockCampus.search(query);
     }
 
-    final uri = Uri.parse('$baseUrl/api/search').replace(queryParameters: {'q': query});
+    // limit=50 is the backend's maximum; the campus has far fewer places.
+    final uri = Uri.parse('$baseUrl/api/rooms')
+        .replace(queryParameters: {'q': query, 'limit': '50'});
     final data = await _send(http.get(uri));
 
-    // Accept either a plain list or {"results": [...]}.
+    // Flask answers {"results": [...]}; also accept a plain list.
     final list = data is List
         ? data
         : (data is Map && data['results'] is List ? data['results'] as List : <dynamic>[]);
     return list
         .map((item) => Destination.fromJson(Map<String, dynamic>.from(item as Map)))
+        // Junction dots are in the place list but nobody searches for them.
+        .where((d) => !d.name.toLowerCase().contains('junction'))
         .toList();
   }
 
-  /// POST /api/route   {"start": "...", "destination": "...", "step_free": false}
+  /// GET /api/route?from=<id>&to=<id>[&accessible=1]
+  ///
+  /// [startName] is only used to label the first step ("You are here").
   Future<NavigationRoute> getRoute({
     required String start,
     required String destination,
     bool stepFree = false,
+    String? startName,
   }) async {
     if (useMock) {
       await Future.delayed(const Duration(milliseconds: 800));
@@ -75,20 +82,19 @@ class ApiService {
       }
     }
 
-    final uri = Uri.parse('$baseUrl/api/route');
-    final data = await _send(http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'start': start,
-        'destination': destination,
-        'step_free': stepFree,
-      }),
-    ));
+    final uri = Uri.parse('$baseUrl/api/route').replace(queryParameters: {
+      'from': start,
+      'to': destination,
+      if (stepFree) 'accessible': '1',
+    });
+    final data = await _send(http.get(uri));
     if (data is! Map) {
       throw const ApiException('The server sent data the app could not read.');
     }
-    return NavigationRoute.fromJson(Map<String, dynamic>.from(data));
+    return NavigationRoute.fromBackend(
+      Map<String, dynamic>.from(data),
+      startName: startName ?? 'Your location',
+    );
   }
 
   /// POST /api/estimates   {"start": "...", "destinations": ["id", ...]}
@@ -158,7 +164,7 @@ class ApiService {
     try {
       final response = await request.timeout(_timeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw ApiException('The server answered with an error (${response.statusCode}).');
+        throw ApiException(_errorMessage(response));
       }
       // Some endpoints (like /api/report) may answer with an empty body.
       return response.body.isEmpty ? null : jsonDecode(response.body);
@@ -170,6 +176,30 @@ class ApiService {
       throw const ApiException('The server sent data the app could not read.');
     } catch (_) {
       throw const ApiException('Could not reach the server. Check your connection.');
+    }
+  }
+
+  /// Flask errors look like {"error": {"code": "...", "message": "..."}}.
+  /// Turn the common ones into something a student can act on.
+  String _errorMessage(http.Response response) {
+    String? code;
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map && body['error'] is Map) {
+        code = body['error']['code']?.toString();
+      }
+    } catch (_) {
+      // Not JSON: fall through to the generic message.
+    }
+    switch (code) {
+      case 'no_route':
+        return 'No walking route was found for that place.';
+      case 'off_campus':
+        return 'You seem to be too far from the campus paths.';
+      case 'not_found':
+        return 'The app does not know that place yet. Try another start point.';
+      default:
+        return 'The server answered with an error (${response.statusCode}).';
     }
   }
 }

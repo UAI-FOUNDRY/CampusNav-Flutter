@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../data/mock_campus.dart';
+import '../data/campus.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../widgets/slide_route.dart';
@@ -41,7 +41,7 @@ class _ScanScreenState extends State<ScanScreen> {
       final raw = barcode.rawValue;
       if (raw == null) continue;
 
-      final point = MockCampus.startPointFromCode(raw);
+      final point = Campus.startPointFromCode(raw);
       if (point == null) {
         _showInvalid();
         return;

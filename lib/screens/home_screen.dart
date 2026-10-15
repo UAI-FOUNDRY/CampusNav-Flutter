@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../data/mock_campus.dart';
+import '../data/campus.dart';
 import '../models/destination.dart';
 import '../models/start_point.dart';
 import '../services/api_service.dart';
@@ -217,7 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final parts = trip.split('>');
       if (parts.length != 2) continue;
       final destination = byId[parts[1]];
-      final from = MockCampus.startPointFromCode(parts[0]);
+      final from = Campus.startPointFromCode(parts[0]);
       if (destination == null || from == null) continue;
 
       rows.add(Padding(

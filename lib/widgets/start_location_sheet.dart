@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../data/mock_campus.dart';
+import '../data/campus.dart';
 import '../models/start_point.dart';
 import '../screens/scan_screen.dart';
 import '../state/app_state.dart';
@@ -85,7 +85,7 @@ class _StartLocationSheet extends StatelessWidget {
               builder: (context, current, _) {
                 return Column(
                   children: [
-                    for (final point in MockCampus.startPoints)
+                    for (final point in Campus.startPoints)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: _StartTile(point: point, selected: point.id == current.id),

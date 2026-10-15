@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../state/app_state.dart';
 import '../widgets/start_location_sheet.dart';
 import 'home_screen.dart';
+import '../services/api_service.dart';
+import 'live_map_screen.dart';
 import 'map_screen.dart';
 
 /// The bottom navigation bar and the screens it switches between.
@@ -39,7 +41,11 @@ class _AppShellState extends State<AppShell> {
       // survive switching tabs.
       body: IndexedStack(
         index: _index,
-        children: const [HomeScreen(), MapScreen()],
+        children: [
+          const HomeScreen(),
+          // Real OpenStreetMap + floor plan with the backend, schematic map in demo mode.
+          if (ApiService.useMock) const MapScreen() else const LiveMapScreen(),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,

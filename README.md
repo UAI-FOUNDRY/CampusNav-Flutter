@@ -46,7 +46,7 @@ The current Flutter application includes:
 - [x] API service with timeouts and a built-in demo mode
 - [x] Destination and route data models
 - [ ] Real campus data (GeoJSON, replacing the schematic map)
-- [ ] Flask backend integration (needs the real JSON contract)
+- [x] Flask backend integration (search, route, estimates, report), real OpenStreetMap route line and floor-plan image
 - [x] QR scanning for the start location (camera, with a manual fallback)
 - [ ] Real-time positioning (guidance is simulated with a "Next step" button)
 
@@ -76,35 +76,20 @@ Scanning one sets the start location. A plain node id also works.
 `CampusNav-QR-codes.pdf` has a printable code for every node in the demo data.
 When the real campus graph exists, generate one code per node id from it.
 
-## Backend contract the app expects
+## Backend contract (live mode)
 
-`GET /api/search?q=` returns a list (an empty `q` returns everything):
+The app talks to the Flask API in the backend repo; `docs/api.md` there is the reference.
 
-```json
-[{"id": "ai_lab", "name": "AI Lab", "building": "Academic Building", "floor": 2, "type": "lab"}]
-```
+| App feature | Request |
+|---|---|
+| Search / list places | `GET /api/rooms?q=&limit=50` |
+| Route | `GET /api/route?from=<id>&to=<id>[&accessible=1]` |
+| Walking-time labels | `POST /api/estimates` |
+| Report a problem | `POST /api/report` |
 
-`POST /api/route` with `{"start": "gate_main", "destination": "ai_lab", "step_free": false}` returns:
-
-```json
-{
-  "distance_meters": 170,
-  "estimated_minutes": 2.8,
-  "steps": [
-    {"type": "start", "title": "You are here", "instruction": "Main Gate", "floor": 0},
-    {"type": "walk", "title": "Walk straight", "instruction": "Walk 42 m to Main Junction", "distance": 42, "floor": 0},
-    {"type": "stairs", "title": "Take the stairs", "instruction": "Go up to floor 2", "distance": 20, "floor": 2},
-    {"type": "arrive", "title": "AI Lab", "instruction": "Your destination", "floor": 2}
-  ],
-  "path": [[500, 640], [500, 520]]
-}
-```
-
-`POST /api/report` with `{"start": "...", "destination": "...", "reason": "...", "details": "..."}`
-answers with any 2xx status (the body can be empty).
-
-Step `type` is one of: start, walk, turn_left, turn_right, enter, stairs, lift, arrive.
-The app also accepts `distance` / `duration` as alternative key names.
+`NavigationRoute.fromBackend` turns the route answer into the app's models. Outdoor legs are drawn on OpenStreetMap
+(`LiveCampusMap`), indoor legs on the bundled floor-plan image (`LiveFloorPlan`). Copy new floor images from the backend's
+`app/assets/floorplans/` into this repo's `assets/floorplans/`.
 
 ---
 

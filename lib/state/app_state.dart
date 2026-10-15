@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../data/mock_campus.dart';
+import '../data/campus.dart';
 import '../models/start_point.dart';
 
 /// State that more than one screen needs, saved on the phone.
@@ -12,7 +12,7 @@ class AppState {
   AppState._();
 
   static final ValueNotifier<StartPoint> startPoint =
-      ValueNotifier<StartPoint>(MockCampus.startPoints.first);
+      ValueNotifier<StartPoint>(Campus.startPoints.first);
   static final ValueNotifier<bool> stepFree = ValueNotifier<bool>(false);
   static final ValueNotifier<List<String>> favorites =
       ValueNotifier<List<String>>(const []);
@@ -41,7 +41,7 @@ class AppState {
     if (startId == null) {
       firstRun = true;
     } else {
-      for (final point in MockCampus.startPoints) {
+      for (final point in Campus.startPoints) {
         if (point.id == startId) startPoint.value = point;
       }
     }
