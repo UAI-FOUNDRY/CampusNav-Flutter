@@ -109,11 +109,38 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    // The heading makes room for the results while the keyboard is open.
+    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: keyboardOpen
+                ? const SizedBox(width: double.infinity)
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: AppColors.academic,
+                            borderRadius: BorderRadius.circular(11),
+                          ),
+                          child: const Icon(Icons.navigation, size: 20, color: Colors.white),
+                        ),
+                        const SizedBox(width: 12),
+                        Text('UAI Navigation', style: text.headlineSmall),
+                      ],
+                    ),
+                  ),
+          ),
           // "From" and "to" as two stations on one line: the first field is
           // where you are, the second is where you want to go.
           Padding(

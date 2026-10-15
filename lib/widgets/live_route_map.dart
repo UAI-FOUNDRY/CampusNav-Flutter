@@ -37,6 +37,11 @@ class LiveCampusMap extends StatefulWidget {
   /// Keep the camera centred on the person (guidance).
   final bool follow;
 
+  /// Fill all the space it is given (square corners, round buttons at the
+  /// bottom right) instead of being a rounded card of [height]. Used by the
+  /// full-screen navigation view.
+  final bool fill;
+
   /// Where to look when there is no route to fit (Universal AI University).
   static const campus = LatLng(18.9027, 73.3742);
 
@@ -49,6 +54,7 @@ class LiveCampusMap extends StatefulWidget {
     this.height = 300,
     this.person,
     this.follow = false,
+    this.fill = false,
   });
 
   @override
@@ -192,9 +198,9 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     final following = widget.follow && me != null;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(widget.fill ? 0 : 20),
       child: SizedBox(
-        height: widget.height,
+        height: widget.fill ? double.infinity : widget.height,
         child: Stack(
           children: [
             FlutterMap(
@@ -294,6 +300,10 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                     ],
                   ),
                 RichAttributionWidget(
+                  // Bottom left in full screen, because the buttons are on the right.
+                  alignment: widget.fill
+                      ? AttributionAlignment.bottomLeft
+                      : AttributionAlignment.bottomRight,
                   showFlutterMapAttribution: false,
                   attributions: [
                     TextSourceAttribution(
@@ -305,6 +315,32 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                 ),
               ],
             ),
+            if (widget.fill)
+              Positioned(
+                right: 12,
+                bottom: 20,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _roundButton(
+                      icon: _satellite ? Icons.map_outlined : Icons.satellite_alt,
+                      tooltip: _satellite ? 'Street map' : 'Satellite',
+                      onTap: () => setState(() => _satellite = !_satellite),
+                    ),
+                    if (me != null) ...[
+                      const SizedBox(height: 10),
+                      _roundButton(
+                        icon: Icons.my_location,
+                        tooltip: 'Centre on me',
+                        onTap: () {
+                          if (_ready) _controller.move(me, _followZoom);
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            if (!widget.fill)
             Positioned(
               top: 10,
               right: 10,
@@ -340,7 +376,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                 ),
               ),
             ),
-            if (widget.follow && me != null)
+            if (!widget.fill && widget.follow && me != null)
               Positioned(
                 right: 10,
                 bottom: 28,
@@ -359,6 +395,23 @@ class _LiveCampusMapState extends State<LiveCampusMap>
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _roundButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.white,
+      elevation: 3,
+      shape: const CircleBorder(),
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, size: 22, color: AppColors.ink),
+        onPressed: onTap,
       ),
     );
   }

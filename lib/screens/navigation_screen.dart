@@ -172,8 +172,26 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   // ------------------------------------------------------------------- build
 
+  /// Live guidance takes over the whole screen, like Google Maps.
+  bool get _fullScreen =>
+      !ApiService.useMock && _guiding && !_arrived && _route != null;
+
   @override
   Widget build(BuildContext context) {
+    // The phone's back button ends navigation first instead of leaving the screen.
+    return PopScope(
+      canPop: !_guiding || _arrived,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _endGuidance();
+      },
+      child: _scaffold(),
+    );
+  }
+
+  Widget _scaffold() {
+    if (_fullScreen) {
+      return Scaffold(body: _liveGuidance(_route!));
+    }
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.destination.name),
@@ -417,9 +435,75 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   // ---------------------------------------------------------------- guidance
 
-  /// The live map during guidance: the outdoor map while the current step is
-  /// outside, the floor plan once it is inside. Your person icon sits at the
-  /// start of the current step and moves as you go to the next one.
+  /// Full-screen navigation: the map fills the screen, the instruction floats
+  /// at the top and a panel with distance and buttons sits at the bottom.
+  Widget _liveGuidance(NavigationRoute route) {
+    final step = route.steps[_stepIndex];
+    final top = MediaQuery.of(context).padding.top;
+
+    return Column(
+      children: [
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(child: _guidanceMap(route, step)),
+              // A soft white fade so the phone's clock and battery stay readable.
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: top + 24,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.white.withValues(alpha: 0.9),
+                          Colors.white.withValues(alpha: 0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: top + 8,
+                left: 12,
+                right: 12,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 320),
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, -0.15),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  ),
+                  child: _TurnBanner(
+                    key: ValueKey(_stepIndex),
+                    step: step,
+                    line: _line,
+                    index: _stepIndex,
+                    total: route.steps.length - 1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        _guidancePanel(route),
+      ],
+    );
+  }
+
+  /// The outdoor map while the current step is outside, the floor plan once
+  /// it is inside. The person icon sits at the start of the current step and
+  /// moves as you go to the next one.
   Widget _guidanceMap(NavigationRoute route, RouteStep step) {
     final inside = step.space == 'indoor';
 
@@ -435,7 +519,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         color: _line,
         person: here,
         follow: true,
-        height: 320,
+        fill: true,
       );
     } else {
       RouteLeg? leg;
@@ -447,17 +531,61 @@ class _NavigationScreenState extends State<NavigationScreen> {
       }
       if (leg != null && step.x != null && step.y != null) {
         key = 'inside-${leg.floor}';
-        child = MapFrame(
-          aspectRatio: leg.imageWidth / leg.imageHeight,
-          zoomable: true,
-          child: LiveFloorPlan(
-            image: leg.image!,
-            imageWidth: leg.imageWidth,
-            imageHeight: leg.imageHeight,
-            route: leg.points,
-            color: _line,
-            person: MapPoint(step.x!, step.y!),
-          ),
+        child = Stack(
+          children: [
+            Positioned.fill(
+              child: Container(
+                color: AppColors.mapBackground,
+                // Pinch to zoom the floor plan, drag to move it.
+                child: InteractiveViewer(
+                  minScale: 1,
+                  maxScale: 4,
+                  child: Center(
+                    child: AspectRatio(
+                      aspectRatio: leg.imageWidth / leg.imageHeight,
+                      child: LiveFloorPlan(
+                        image: leg.image!,
+                        imageWidth: leg.imageWidth,
+                        imageHeight: leg.imageHeight,
+                        route: leg.points,
+                        color: _line,
+                        person: MapPoint(step.x!, step.y!),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 12,
+              bottom: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.layers_outlined, size: 16, color: AppColors.ink),
+                    const SizedBox(width: 6),
+                    Text(
+                      floorLabel(leg.floor),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         );
       }
     }
@@ -465,7 +593,127 @@ class _NavigationScreenState extends State<NavigationScreen> {
     // Fades between the outdoor map and the floor plan when you go inside.
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 350),
-      child: KeyedSubtree(key: ValueKey(key), child: child),
+      child: KeyedSubtree(
+        key: ValueKey(key),
+        child: SizedBox.expand(child: child),
+      ),
+    );
+  }
+
+  /// Bottom panel: distance and time left, progress, and the buttons.
+  Widget _guidancePanel(NavigationRoute route) {
+    final text = Theme.of(context).textTheme;
+    final remaining = _remainingMeters(route);
+    final progress = _stepIndex / (route.steps.length - 1);
+    final atEnd = _stepIndex >= route.steps.length - 1;
+    final bottom = MediaQuery.of(context).padding.bottom;
+    final minutes = route.distance > 0
+        ? math.max(1, (route.minutes * remaining / route.distance).round())
+        : 1;
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, 16, 20, 14 + bottom),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(color: Color(0x26000000), blurRadius: 16, offset: Offset(0, -4)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: remaining < 1
+                    ? Text('Arriving', style: text.headlineSmall)
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          // The number counts down smoothly instead of jumping.
+                          TweenAnimationBuilder<double>(
+                            tween: Tween<double>(end: remaining),
+                            duration: const Duration(milliseconds: 600),
+                            curve: Curves.easeOut,
+                            builder: (context, value, _) =>
+                                Text('${value.round()}', style: text.headlineSmall),
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            'm left',
+                            style: text.titleMedium?.copyWith(color: AppColors.inkMuted),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            '·  $minutes min',
+                            style: text.titleMedium?.copyWith(color: AppColors.inkMuted),
+                          ),
+                        ],
+                      ),
+              ),
+              TextButton(
+                onPressed: _endGuidance,
+                style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+                child: const Text('End'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: progress),
+              duration: const Duration(milliseconds: 500),
+              curve: Curves.easeOut,
+              builder: (context, value, _) => LinearProgressIndicator(
+                value: value,
+                minHeight: 6,
+                color: _line,
+                backgroundColor: AppColors.mist,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              if (_stepIndex > 1) ...[
+                OutlinedButton(
+                  onPressed: _previous,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(56, 56),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  child: const Icon(Icons.arrow_back),
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _line,
+                    foregroundColor: readableOnLine(_line),
+                  ),
+                  onPressed: () {
+                    _stopSimulation();
+                    _next(route);
+                  },
+                  child: Text(atEnd ? "I've arrived" : 'Next step'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              IconButton.filledTonal(
+                tooltip: _simulating ? 'Pause simulation' : 'Simulate walk',
+                style: IconButton.styleFrom(minimumSize: const Size(56, 56)),
+                onPressed: () => _toggleSimulation(route),
+                icon: Icon(_simulating ? Icons.pause : Icons.play_arrow),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -476,10 +724,6 @@ class _NavigationScreenState extends State<NavigationScreen> {
     final progress = _stepIndex / (route.steps.length - 1);
 
     return [
-      if (!ApiService.useMock) ...[
-        _guidanceMap(route, step),
-        const SizedBox(height: 16),
-      ],
       Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
@@ -596,6 +840,95 @@ class _NavigationScreenState extends State<NavigationScreen> {
               icon: const Icon(Icons.navigation),
               label: const Text('Start navigation'),
             ),
+    );
+  }
+}
+
+/// The instruction that floats over the map during navigation.
+class _TurnBanner extends StatelessWidget {
+  final RouteStep step;
+  final Color line;
+  final int index;
+  final int total;
+
+  const _TurnBanner({
+    super.key,
+    required this.step,
+    required this.line,
+    required this.index,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final onColor = readableOnLine(line);
+    final metres = step.distance ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
+      decoration: BoxDecoration(
+        color: line,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(color: Colors.black38, blurRadius: 14, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: onColor.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(iconForStep(step.type), color: onColor, size: 26),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  step.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.titleLarge?.copyWith(color: onColor),
+                ),
+                if (step.instruction.isNotEmpty && step.instruction != step.title) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    step.instruction,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.bodyMedium?.copyWith(color: onColor.withValues(alpha: 0.92)),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                Text(
+                  'Step $index of $total',
+                  style: text.bodySmall?.copyWith(color: onColor.withValues(alpha: 0.75)),
+                ),
+              ],
+            ),
+          ),
+          if (metres >= 1) ...[
+            const SizedBox(width: 12),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${metres.round()}',
+                  style: text.headlineSmall?.copyWith(color: onColor),
+                ),
+                Text('m', style: text.bodySmall?.copyWith(color: onColor.withValues(alpha: 0.8))),
+              ],
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
