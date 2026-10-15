@@ -116,12 +116,25 @@ class RouteStep {
   final double? distance; // metres
   final int? floor;
 
+  // Where this step starts (live routes only): "outdoor" steps have lat/lng,
+  // "indoor" steps have x/y in floor-plan image pixels.
+  final String? space;
+  final double? lat;
+  final double? lng;
+  final double? x;
+  final double? y;
+
   const RouteStep({
     required this.type,
     required this.title,
     required this.instruction,
     this.distance,
     this.floor,
+    this.space,
+    this.lat,
+    this.lng,
+    this.x,
+    this.y,
   });
 
   bool get isFloorChange => type == 'stairs' || type == 'lift';
@@ -174,8 +187,28 @@ class RouteStep {
       instruction: text,
       distance: _asDouble(json['distance_m']),
       floor: _asInt(json['floor']) ?? 0,
+      space: json['space']?.toString(),
+      lat: _asDouble(json['lat']),
+      lng: _asDouble(json['lng']),
+      x: _asDouble(json['x']),
+      y: _asDouble(json['y']),
     );
   }
+
+  /// The same step placed at another step's position (used for "You are
+  /// here" and "Arrive", which the backend does not send as separate points).
+  RouteStep placedAt(RouteStep other) => RouteStep(
+        type: type,
+        title: title,
+        instruction: instruction,
+        distance: distance,
+        floor: other.floor ?? floor,
+        space: other.space,
+        lat: other.lat,
+        lng: other.lng,
+        x: other.x,
+        y: other.y,
+      );
 }
 
 class NavigationRoute {
@@ -246,19 +279,27 @@ class NavigationRoute {
         .map((s) => Map<String, dynamic>.from(s as Map))
         .toList();
 
-    final steps = <RouteStep>[
-      RouteStep(type: 'start', title: 'You are here', instruction: startName, floor: 0),
-    ];
-    for (var i = 0; i < raw.length - 1; i++) {
-      steps.add(RouteStep.fromBackend(raw[i]));
+    final parsed = [for (final r in raw) RouteStep.fromBackend(r)];
+
+    final steps = <RouteStep>[];
+    final start = RouteStep(
+      type: 'start',
+      title: 'You are here',
+      instruction: startName,
+      floor: 0,
+    );
+    steps.add(parsed.isEmpty ? start : start.placedAt(parsed.first));
+    for (var i = 0; i < parsed.length - 1; i++) {
+      steps.add(parsed[i]);
     }
     // The backend's last step is "Arrive at <place>".
-    steps.add(RouteStep(
+    final arrive = RouteStep(
       type: 'arrive',
       title: (json['to_name'] ?? 'Destination').toString(),
       instruction: 'Your destination',
-      floor: raw.isEmpty ? 0 : _asInt(raw.last['floor']) ?? 0,
-    ));
+      floor: 0,
+    );
+    steps.add(parsed.isEmpty ? arrive : arrive.placedAt(parsed.last));
 
     return NavigationRoute(
       distance: _asDouble(json['distance_m']) ?? 0,

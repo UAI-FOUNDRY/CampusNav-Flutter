@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/route.dart';
 import '../theme/app_colors.dart';
+import 'person_marker.dart';
 import 'route_painter.dart';
 
 /// A tappable dot on a floor plan (a place you can navigate to).
@@ -34,6 +35,11 @@ class LiveFloorPlan extends StatelessWidget {
   final Color color;
   final List<FloorPin> pins;
 
+  /// Where the user is right now (guidance), in image pixels. The person icon
+  /// glides to each new position and the part of the line already walked turns
+  /// grey. Null draws the plain route.
+  final MapPoint? person;
+
   const LiveFloorPlan({
     super.key,
     required this.image,
@@ -42,6 +48,7 @@ class LiveFloorPlan extends StatelessWidget {
     this.route = const [],
     this.color = AppColors.academic,
     this.pins = const [],
+    this.person,
   });
 
   @override
@@ -50,6 +57,27 @@ class LiveFloorPlan extends StatelessWidget {
       builder: (context, constraints) {
         final s = constraints.maxWidth / imageWidth;
         final points = [for (final p in route) MapPoint(p.x, p.y)];
+        final me = person;
+
+        // Guidance: split the route into walked and still-to-walk parts.
+        var walked = <MapPoint>[];
+        var ahead = points;
+        if (me != null && points.length > 1) {
+          var best = 0;
+          var bestDistance = double.infinity;
+          for (var i = 0; i < points.length; i++) {
+            final dx = points[i].x - me.x;
+            final dy = points[i].y - me.y;
+            final d = dx * dx + dy * dy;
+            if (d < bestDistance) {
+              bestDistance = d;
+              best = i;
+            }
+          }
+          walked = [...points.sublist(0, best + 1), me];
+          ahead = [me, ...points.sublist(best + 1)];
+        }
+        final marker = PersonMarker(color: color, size: 30);
 
         return Stack(
           children: [
@@ -68,7 +96,30 @@ class LiveFloorPlan extends StatelessWidget {
                 ),
               ),
             ),
-            if (points.length > 1)
+            if (walked.length > 1)
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: RoutePainter(
+                    points: walked,
+                    scale: s,
+                    color: Colors.grey.shade500,
+                    strokeWidth: 6,
+                  ),
+                ),
+              ),
+            if (me != null && ahead.length > 1)
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: RoutePainter(
+                    points: ahead,
+                    scale: s,
+                    color: color,
+                    strokeWidth: 6,
+                    dots: true,
+                  ),
+                ),
+              ),
+            if (me == null && points.length > 1)
               Positioned.fill(
                 child: TweenAnimationBuilder<double>(
                   tween: Tween<double>(begin: 0, end: 1),
@@ -88,10 +139,10 @@ class LiveFloorPlan extends StatelessWidget {
               ),
             for (final pin in pins)
               Positioned(
-                left: pin.x * s - 11,
-                top: pin.y * s - 11,
-                width: 22,
-                height: 22,
+                left: pin.x * s - 14,
+                top: pin.y * s - 14,
+                width: 28,
+                height: 28,
                 child: Tooltip(
                   message: pin.label,
                   child: GestureDetector(
@@ -102,12 +153,12 @@ class LiveFloorPlan extends StatelessWidget {
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2),
                       ),
-                      child: const Icon(Icons.near_me, size: 12, color: Colors.white),
+                      child: const Icon(Icons.near_me, size: 14, color: Colors.white),
                     ),
                   ),
                 ),
               ),
-            if (points.isNotEmpty)
+            if (me == null && points.isNotEmpty)
               Positioned(
                 left: points.first.x * s - 9,
                 top: points.first.y * s - 9,
@@ -126,6 +177,15 @@ class LiveFloorPlan extends StatelessWidget {
                 left: points.last.x * s - 16,
                 top: points.last.y * s - 32,
                 child: Icon(Icons.location_on, size: 32, color: color),
+              ),
+            // You are here: slides smoothly from one step to the next.
+            if (me != null)
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 1000),
+                curve: Curves.easeInOut,
+                left: me.x * s - marker.outerSize / 2,
+                top: me.y * s - marker.outerSize / 2,
+                child: marker,
               ),
           ],
         );

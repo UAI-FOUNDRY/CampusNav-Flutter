@@ -417,6 +417,58 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   // ---------------------------------------------------------------- guidance
 
+  /// The live map during guidance: the outdoor map while the current step is
+  /// outside, the floor plan once it is inside. Your person icon sits at the
+  /// start of the current step and moves as you go to the next one.
+  Widget _guidanceMap(NavigationRoute route, RouteStep step) {
+    final inside = step.space == 'indoor';
+
+    Widget child = const SizedBox.shrink();
+    var key = 'outside';
+
+    if (!inside) {
+      final here = (step.lat != null && step.lng != null)
+          ? GeoPoint(step.lat!, step.lng!)
+          : null;
+      child = LiveCampusMap(
+        route: route.outdoorPolyline,
+        color: _line,
+        person: here,
+        follow: true,
+        height: 320,
+      );
+    } else {
+      RouteLeg? leg;
+      for (final l in route.indoorLegs) {
+        if (l.floor == (step.floor ?? 0)) {
+          leg = l;
+          break;
+        }
+      }
+      if (leg != null && step.x != null && step.y != null) {
+        key = 'inside-${leg.floor}';
+        child = MapFrame(
+          aspectRatio: leg.imageWidth / leg.imageHeight,
+          zoomable: true,
+          child: LiveFloorPlan(
+            image: leg.image!,
+            imageWidth: leg.imageWidth,
+            imageHeight: leg.imageHeight,
+            route: leg.points,
+            color: _line,
+            person: MapPoint(step.x!, step.y!),
+          ),
+        );
+      }
+    }
+
+    // Fades between the outdoor map and the floor plan when you go inside.
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 350),
+      child: KeyedSubtree(key: ValueKey(key), child: child),
+    );
+  }
+
   List<Widget> _guidanceContent(NavigationRoute route) {
     final text = Theme.of(context).textTheme;
     final step = route.steps[_stepIndex];
@@ -424,6 +476,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
     final progress = _stepIndex / (route.steps.length - 1);
 
     return [
+      if (!ApiService.useMock) ...[
+        _guidanceMap(route, step),
+        const SizedBox(height: 16),
+      ],
       Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
