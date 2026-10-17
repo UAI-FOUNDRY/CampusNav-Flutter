@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/destination.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
+import '../services/api_service.dart';
 import '../theme/destination_style.dart';
 
 /// Compact tile for the "Quick access" row on the home screen.
@@ -23,7 +24,7 @@ class QuickTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final line = lineColorForBuilding(destination.building);
+    final line = _lineFor(destination);
 
     return SizedBox(
       width: 150,
@@ -104,3 +105,8 @@ class QuickTile extends StatelessWidget {
     );
   }
 }
+
+/// Demo data is coloured by building (its schematic map); the real campus by
+/// the kind of place, like metro lines.
+Color _lineFor(Destination d) =>
+    ApiService.useMock ? lineColorForBuilding(d.building) : colorForType(d.type);

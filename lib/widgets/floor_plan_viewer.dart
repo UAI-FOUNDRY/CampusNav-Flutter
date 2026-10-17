@@ -31,6 +31,10 @@ class FloorPlanViewer extends StatefulWidget {
   /// Show the + / - / fit buttons (off for small cards).
   final bool controls;
 
+  /// Space to keep clear at the top (chips over the map); the compass sits
+  /// below it.
+  final double topInset;
+
   const FloorPlanViewer({
     super.key,
     required this.image,
@@ -44,6 +48,7 @@ class FloorPlanViewer extends StatefulWidget {
     this.cover = false,
     this.bottomInset = 0,
     this.controls = true,
+    this.topInset = 0,
   });
 
   @override
@@ -56,6 +61,7 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
   // Where the picture sits inside the view (letterbox), set on layout.
   Rect _picture = Rect.zero;
   Size _view = Size.zero;
+  double _rotation = 0; // radians, for the compass
 
   /// Pan and zoom so the picture pixel (x, y) is in view, a little above the
   /// middle so a card at the bottom does not hide it.
@@ -126,7 +132,8 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                   focusFill: widget.focus != null ? 0.85 : 1.0,
                   maxFocusScale: widget.focus != null ? 4.0 : 8.0,
                   maxScale: math.max(6.0, _coverScale() * 4),
-                  builder: (context, zoom) => Stack(
+                  onRotationChanged: (r) => setState(() => _rotation = r),
+                  builder: (context, zoom, rotation) => Stack(
                     children: [
                       Positioned.fromRect(
                         rect: _picture,
@@ -139,10 +146,24 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                           color: widget.color,
                           person: widget.person,
                           zoom: zoom,
+                          rotation: rotation,
                         ),
                       ),
                     ],
                   ),
+                ),
+              ),
+            ),
+            // Shown while the plan is turned; tap to turn it back north-up.
+            Positioned(
+              right: 12,
+              top: widget.topInset + 12,
+              child: AnimatedScale(
+                scale: _rotation.abs() > 0.01 ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 180),
+                child: _Compass(
+                  rotation: _rotation,
+                  onTap: () => _zoomKey.currentState?.resetRotation(),
                 ),
               ),
             ),
@@ -215,6 +236,31 @@ class _ZoomButtons extends StatelessWidget {
           child: button(Icons.fit_screen_outlined, 'Fit to screen', onFit),
         ),
       ],
+    );
+  }
+}
+
+/// A round button whose needle points to the top of the plan as drawn.
+class _Compass extends StatelessWidget {
+  final double rotation;
+  final VoidCallback onTap;
+
+  const _Compass({required this.rotation, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      elevation: 3,
+      shape: const CircleBorder(),
+      child: IconButton(
+        tooltip: 'Turn back north-up',
+        onPressed: onTap,
+        icon: Transform.rotate(
+          angle: rotation,
+          child: const Icon(Icons.navigation, size: 22, color: AppColors.danger),
+        ),
+      ),
     );
   }
 }

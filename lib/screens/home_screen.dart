@@ -498,7 +498,9 @@ class _TripRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final line = lineColorForBuilding(destination.building);
+    final line = ApiService.useMock
+        ? lineColorForBuilding(destination.building)
+        : colorForType(destination.type);
 
     return AppCard(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

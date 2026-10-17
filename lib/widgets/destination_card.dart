@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/destination.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
+import '../services/api_service.dart';
 import '../theme/destination_style.dart';
 import 'highlight_text.dart';
 import 'pill.dart';
@@ -25,7 +26,7 @@ class DestinationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final line = lineColorForBuilding(destination.building);
+    final line = _lineFor(destination);
 
     return Material(
       color: Colors.white,
@@ -112,3 +113,8 @@ class _SavedStar extends StatelessWidget {
     );
   }
 }
+
+/// Demo data is coloured by building (its schematic map); the real campus by
+/// the kind of place, like metro lines.
+Color _lineFor(Destination d) =>
+    ApiService.useMock ? lineColorForBuilding(d.building) : colorForType(d.type);

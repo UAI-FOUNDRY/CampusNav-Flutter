@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -5,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../models/destination.dart';
 import '../models/route.dart';
 import '../theme/app_colors.dart';
+import '../theme/destination_style.dart';
 import 'person_marker.dart';
 
 const _streetUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -46,6 +49,9 @@ class LiveCampusMap extends StatefulWidget {
   /// the round buttons and the attribution sit above it.
   final double bottomInset;
 
+  /// Space kept clear at the top (chips over the map); the compass sits below.
+  final double topInset;
+
   /// Where to look when there is no route to fit (Universal AI University).
   static const campus = LatLng(18.9027, 73.3742);
 
@@ -60,6 +66,7 @@ class LiveCampusMap extends StatefulWidget {
     this.follow = false,
     this.fill = false,
     this.bottomInset = 0,
+    this.topInset = 0,
   });
 
   @override
@@ -75,6 +82,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   late final AnimationController _anim;
 
   bool _satellite = true;
+  double _rotation = 0; // degrees, for the compass
   bool _ready = false; // the map can only be moved after it has been built
 
   LatLng? _me; // where the person icon is drawn right now
@@ -223,11 +231,17 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                       )
                     : null,
                 onMapReady: () => _ready = true,
-                // No rotation: it makes a tiny campus map confusing.
+                onPositionChanged: (camera, hasGesture) {
+                  if ((camera.rotation - _rotation).abs() > 0.5) {
+                    setState(() => _rotation = camera.rotation);
+                  }
+                },
+                // Two-finger twist turns the map; the compass turns it back.
                 interactionOptions: const InteractionOptions(
                   flags: InteractiveFlag.drag |
                       InteractiveFlag.pinchZoom |
-                      InteractiveFlag.doubleTapZoom,
+                      InteractiveFlag.doubleTapZoom |
+                      InteractiveFlag.rotate,
                 ),
               ),
               children: [
@@ -266,6 +280,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                   ),
                 if (pinned.isNotEmpty)
                   MarkerLayer(
+                    rotate: true, // pins stay upright when the map turns
                     markers: [
                       for (final d in pinned)
                         Marker(
@@ -277,13 +292,20 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                             onTap: widget.onPinTap == null
                                 ? null
                                 : () => widget.onPinTap!(d),
-                            child: Icon(Icons.location_on, size: 32, color: widget.color),
+                            // Each kind of place has its own line colour.
+                            child: Icon(
+                              Icons.location_on,
+                              size: 32,
+                              color: colorForType(d.type),
+                              shadows: const [Shadow(color: Colors.white, blurRadius: 3)],
+                            ),
                           ),
                         ),
                     ],
                   ),
                 if (line.length > 1 || me != null)
                   MarkerLayer(
+                    rotate: true,
                     markers: [
                       // Where you are going.
                       if (line.length > 1)
@@ -319,6 +341,32 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                   ],
                 ),
               ],
+            ),
+            // Shown while the map is turned; tap to turn it back north-up.
+            Positioned(
+              left: widget.fill ? null : 10,
+              right: widget.fill ? 12 : null,
+              top: widget.topInset + (widget.fill ? 12 : 10),
+              child: AnimatedScale(
+                scale: _rotation.abs() > 0.5 ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 180),
+                child: Material(
+                  color: Colors.white,
+                  elevation: 3,
+                  shape: const CircleBorder(),
+                  child: IconButton(
+                    tooltip: 'Turn back north-up',
+                    onPressed: () {
+                      if (_ready) _controller.rotate(0);
+                      setState(() => _rotation = 0);
+                    },
+                    icon: Transform.rotate(
+                      angle: _rotation * math.pi / 180,
+                      child: const Icon(Icons.navigation, size: 22, color: AppColors.danger),
+                    ),
+                  ),
+                ),
+              ),
             ),
             if (widget.fill)
               Positioned(

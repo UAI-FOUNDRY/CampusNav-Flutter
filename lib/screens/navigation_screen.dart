@@ -63,7 +63,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Timer? _timer;
   bool _simulating = false;
 
-  Color get _line => lineColorForBuilding(widget.destination.building);
+  /// The route is drawn in the colour of the place's line (labs purple,
+  /// food red ...), like a metro line.
+  Color get _line => ApiService.useMock
+      ? lineColorForBuilding(widget.destination.building)
+      : colorForType(widget.destination.type);
 
   @override
   void initState() {

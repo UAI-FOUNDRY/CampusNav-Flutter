@@ -112,6 +112,9 @@ class Destination {
       'sports': 'sports',
       'hostel': 'hostel',
       'auditorium': 'auditorium',
+      'facility': 'facility',
+      'shop': 'shop',
+      'washroom': 'washroom',
     };
     final mapped = fromCategory[category?.toString()];
     return mapped ?? _inferType(type, name);

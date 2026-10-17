@@ -32,6 +32,7 @@ class LiveMapScreen extends StatefulWidget {
 class _LiveMapScreenState extends State<LiveMapScreen> {
   static const _peek = 92.0; // visible height of the closed sheet
   static const _cardSpace = 168.0; // room the place card needs at the bottom
+  static const _chipsSpace = 52.0; // the line legend across the top of the map
 
   final _api = const ApiService();
   final _sheet = DraggableScrollableController();
@@ -45,6 +46,9 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   int _floor = 0;
   Destination? _selected;
   String _query = '';
+
+  /// Lines (Labs, Food ...) picked in the legend. Empty = show every line.
+  final Set<String> _lines = {};
   GlobalKey<FloorPlanViewerState> _viewerKey = GlobalKey();
 
   @override
@@ -132,6 +136,55 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
 
   void _clearSelection() => setState(() => _selected = null);
 
+  bool _shown(Destination d) =>
+      _lines.isEmpty || _lines.contains(lineForType(d.type).name) || d.id == _selected?.id;
+
+  void _toggleLine(String name) {
+    setState(() {
+      if (!_lines.remove(name)) _lines.add(name);
+      // Hide the card if its place is no longer shown.
+      final sel = _selected;
+      if (sel != null && _lines.isNotEmpty && !_lines.contains(lineForType(sel.type).name)) {
+        _selected = null;
+      }
+    });
+  }
+
+  /// The colour legend across the top of the map. Each chip is a line;
+  /// tapping chips shows only those lines.
+  Widget _legend(List<Destination> places) {
+    final present = <String>{for (final d in places) lineForType(d.type).name};
+    final lines = [for (final l in placeLines) if (present.contains(l.name)) l];
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        itemCount: lines.length + (_lines.isEmpty ? 0 : 1),
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          if (i == lines.length) {
+            return _LineChip(
+              label: 'Show all',
+              color: AppColors.ink,
+              icon: Icons.close,
+              selected: false,
+              onTap: () => setState(_lines.clear),
+            );
+          }
+          final l = lines[i];
+          return _LineChip(
+            label: l.name,
+            color: l.color,
+            icon: l.icon,
+            selected: _lines.contains(l.name),
+            onTap: () => _toggleLine(l.name),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
@@ -209,12 +262,14 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
       children: [
         Positioned.fill(
           child: LiveCampusMap(
-            pins: outside,
+            pins: [for (final d in outside) if (_shown(d)) d],
             onPinTap: _select,
             fill: true,
+            topInset: _chipsSpace,
             bottomInset: _selected != null ? _cardSpace : 0,
           ),
         ),
+        Positioned(left: 0, right: 0, top: 8, child: _legend(outside)),
         Positioned(left: 12, right: 12, bottom: 12, child: _card()),
       ],
     );
@@ -237,19 +292,24 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
                 imageWidth: floor.imageWidth,
                 imageHeight: floor.imageHeight,
                 cover: true,
+                topInset: _chipsSpace,
                 bottomInset: selected != null ? _cardSpace : _peek,
                 pins: [
                   for (final d in rooms)
-                    FloorPin(
-                      label: d.name,
-                      x: d.x!,
-                      y: d.y!,
-                      selected: d.id == selected?.id,
-                      onTap: () => _select(d),
-                    ),
+                    if (_shown(d))
+                      FloorPin(
+                        label: d.name,
+                        x: d.x!,
+                        y: d.y!,
+                        selected: d.id == selected?.id,
+                        color: colorForType(d.type),
+                        icon: iconForType(d.type),
+                        onTap: () => _select(d),
+                      ),
                 ],
               ),
             ),
+            Positioned(left: 0, right: 0, top: 8, child: _legend(rooms)),
             if (selected == null)
               DraggableScrollableSheet(
                 controller: _sheet,
@@ -260,7 +320,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
                 builder: (context, scroll) => _PlacesSheet(
                   scroll: scroll,
                   floor: floor,
-                  rooms: rooms,
+                  rooms: [for (final d in rooms) if (_shown(d)) d],
                   all: [for (final d in _all) if (d.isIndoor) d],
                   query: _query,
                   search: _search,
@@ -429,7 +489,7 @@ class _PlaceRow extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: AppColors.mist),
               ),
-              child: Icon(iconForType(d.type), size: 19, color: AppColors.academic),
+              child: Icon(iconForType(d.type), size: 19, color: lineInk(colorForType(d.type))),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -448,6 +508,60 @@ class _PlaceRow extends StatelessWidget {
             ),
             const Icon(Icons.place_outlined, size: 20, color: AppColors.inkMuted),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One line in the map legend: a coloured dot and its name. Selected chips
+/// are filled with the line colour.
+class _LineChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _LineChip({
+    required this.label,
+    required this.color,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? readableOnLine(color) : AppColors.ink;
+    return Material(
+      color: selected ? color : Colors.white,
+      elevation: 2,
+      shadowColor: Colors.black26,
+      shape: StadiumBorder(side: BorderSide(color: selected ? color : AppColors.mist)),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (selected)
+                Icon(icon, size: 16, color: fg)
+              else
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                ),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: fg),
+              ),
+            ],
+          ),
         ),
       ),
     );

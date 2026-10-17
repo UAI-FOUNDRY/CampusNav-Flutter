@@ -41,7 +41,13 @@ class MapFrame extends StatelessWidget {
       child: AspectRatio(
         aspectRatio: aspectRatio,
         child: zoomable
-            ? ZoomableView(builder: _content, focus: focus, maxScale: maxScale)
+            ? ZoomableView(
+                builder: (context, zoom, rotation) => _content(context, zoom),
+                focus: focus,
+                maxScale: maxScale,
+                // Cards in a scrolling page stay north-up; full-screen maps turn.
+                rotate: false,
+              )
             : _content(context, 1),
       ),
     );

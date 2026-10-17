@@ -23,7 +23,7 @@ class PlaceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final d = destination;
-    final line = lineColorForBuilding(d.building);
+    final line = colorForType(d.type);
 
     return Material(
       color: Colors.white,
@@ -89,7 +89,8 @@ class PlaceCard extends StatelessWidget {
                   icon: const Icon(Icons.directions_walk),
                   label: const Text('Directions'),
                   style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.academic,
+                    backgroundColor: line,
+                    foregroundColor: readableOnLine(line),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                 ),

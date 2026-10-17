@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/route.dart';
 import '../theme/app_colors.dart';
+import '../theme/destination_style.dart';
 import 'person_marker.dart';
 import 'route_painter.dart';
 import 'zoomable_view.dart';
@@ -18,12 +19,19 @@ class FloorPin {
   /// The place picked on the map: a bigger dot with its name always shown.
   final bool selected;
 
+  /// The place's line colour (null = the plan's colour) and its icon, shown
+  /// inside the dot when it is selected.
+  final Color? color;
+  final IconData? icon;
+
   const FloorPin({
     required this.label,
     required this.x,
     required this.y,
     required this.onTap,
     this.selected = false,
+    this.color,
+    this.icon,
   });
 }
 
@@ -70,6 +78,10 @@ class LiveFloorPlan extends StatelessWidget {
   final List<FloorPin> pins;
   final double zoom;
 
+  /// How far the view is rotated (radians). Markers and names are turned
+  /// back by it so they stay upright while the plan turns.
+  final double rotation;
+
   /// Where the user is right now (guidance), in image pixels. The person icon
   /// glides to each new position and the part of the line already walked turns
   /// grey. Null draws the plain route.
@@ -85,6 +97,7 @@ class LiveFloorPlan extends StatelessWidget {
     this.pins = const [],
     this.person,
     this.zoom = 1,
+    this.rotation = 0,
   });
 
   // Sizes on screen at 1x zoom.
@@ -245,7 +258,10 @@ class LiveFloorPlan extends StatelessWidget {
                 top: me.y * s - marker.outerSize / 2,
                 width: marker.outerSize,
                 height: marker.outerSize,
-                child: Transform.scale(scale: k, child: marker),
+                child: Transform.rotate(
+                  angle: -rotation,
+                  child: Transform.scale(scale: k, child: marker),
+                ),
               ),
           ],
         );
@@ -262,10 +278,14 @@ class LiveFloorPlan extends StatelessWidget {
       top: tip ? y - size : y - size / 2,
       width: size,
       height: size,
-      child: Transform.scale(
-        scale: k,
+      child: Transform.rotate(
+        angle: -rotation,
         alignment: tip ? Alignment.bottomCenter : Alignment.center,
-        child: child,
+        child: Transform.scale(
+          scale: k,
+          alignment: tip ? Alignment.bottomCenter : Alignment.center,
+          child: child,
+        ),
       ),
     );
   }
@@ -274,6 +294,8 @@ class LiveFloorPlan extends StatelessWidget {
     const hit = 30.0; // finger-sized tap area around the small dot
     final x = pin.x * s;
     final y = pin.y * s;
+    final c = pin.color ?? color;
+    final big = _pin + 12;
     return [
       _at(
         x,
@@ -288,16 +310,22 @@ class LiveFloorPlan extends StatelessWidget {
             child: Center(
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                width: pin.selected ? _pin + 10 : _pin,
-                height: pin.selected ? _pin + 10 : _pin,
+                width: pin.selected ? big : _pin,
+                height: pin.selected ? big : _pin,
                 decoration: BoxDecoration(
-                  color: pin.selected ? AppColors.ink : color,
+                  color: c,
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white, width: pin.selected ? 3 : 2),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
+                  boxShadow: [
+                    const BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
+                    // A soft halo in the line colour marks the picked place.
+                    if (pin.selected)
+                      BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 0, spreadRadius: 6),
                   ],
                 ),
+                child: pin.selected && pin.icon != null
+                    ? Icon(pin.icon, size: 15, color: readableOnLine(c))
+                    : null,
               ),
             ),
           ),
@@ -306,25 +334,35 @@ class LiveFloorPlan extends StatelessWidget {
       // Names appear once zoomed in far enough for them to fit.
       if (showLabel)
         Positioned(
-          left: x + (pin.selected ? 16 : 10) * k,
-          top: y - 9 * k,
+          left: x,
+          top: y,
           child: IgnorePointer(
-            child: Transform.scale(
-              scale: k,
+            // Anchored on the dot, turned upright, then moved right on screen
+            // so it reads the same whichever way the plan is turned.
+            child: Transform.rotate(
+              angle: -rotation,
               alignment: Alignment.topLeft,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  pin.label,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.ink,
-                    height: 1.2,
+              child: Transform.scale(
+                scale: k,
+                alignment: Alignment.topLeft,
+                child: Transform.translate(
+                  offset: Offset(pin.selected ? 22 : 11, -9),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(6),
+                      border: pin.selected ? Border.all(color: c, width: 1.5) : null,
+                    ),
+                    child: Text(
+                      pin.label,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.ink,
+                        height: 1.2,
+                      ),
+                    ),
                   ),
                 ),
               ),
