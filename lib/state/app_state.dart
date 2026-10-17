@@ -35,7 +35,10 @@ class AppState {
     favorites.value = prefs.getStringList('favorites') ?? const [];
     recents.value = prefs.getStringList('recents') ?? const [];
     trips.value = prefs.getStringList('trips') ?? const [];
-    stepFree.value = prefs.getBool('stepFree') ?? false;
+    // Step-free used to be one app-wide switch; it is now chosen per route
+    // (NavigationScreen) and always starts off. Forget the old saved value.
+    stepFree.value = false;
+    prefs.remove('stepFree');
 
     final startId = prefs.getString('startId');
     if (startId == null) {

@@ -53,6 +53,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
   String? _error;
   bool _loading = true;
 
+  // Step-free is chosen per route and starts off every time; turning it on
+  // asks for a lift/ramp route. Some places can only be reached by stairs,
+  // so when there is none we keep the normal route and say so.
+  bool _stepFree = false;
+  bool _stepFreeBusy = false;
+  bool _noStepFreeRoute = false;
+
   int _tab = 0; // 0 = steps, 1 = map
   int _planFloor = 0; // floor shown on the indoor plan
   bool _guiding = false;
@@ -86,7 +93,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final route = await _api.getRoute(
         start: _start.id,
         destination: widget.destination.id,
-        stepFree: AppState.stepFree.value,
+        stepFree: _stepFree,
         startName: _start.name,
       );
       if (!mounted) return;
@@ -104,6 +111,47 @@ class _NavigationScreenState extends State<NavigationScreen> {
         _error = e.message;
         _loading = false;
       });
+    }
+  }
+
+  /// The step-free switch: fetch the other kind of route but keep showing the
+  /// current one until it arrives. If there is no step-free route, switch
+  /// back off, keep the normal route and explain.
+  Future<void> _setStepFree(bool on) async {
+    setState(() {
+      _stepFree = on;
+      _stepFreeBusy = true;
+    });
+    try {
+      final route = await _api.getRoute(
+        start: _start.id,
+        destination: widget.destination.id,
+        stepFree: on,
+        startName: _start.name,
+      );
+      if (!mounted) return;
+      setState(() {
+        _route = route;
+        _stepFreeBusy = false;
+        _planFloor = route.targetFloor ?? 0;
+        _stepIndex = 0;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _stepFree = false;
+        _stepFreeBusy = false;
+        if (on) _noStepFreeRoute = true;
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(on
+              ? 'No step-free route to ${widget.destination.name}: it can only be '
+                  'reached by stairs. Showing the route with stairs.'
+              : e.message),
+        ));
     }
   }
 
@@ -298,7 +346,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
           Pill(text: floorLabel(d.floor), color: _line, icon: Icons.layers_outlined),
         ],
       ),
-      if (d.floor > 0) ...[
+      // Only when it can matter: the route changes floors, or it is on.
+      if (d.floor > 0 || route.connectorType != null || _stepFree) ...[
         const SizedBox(height: 16),
         AppCard(
           padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
@@ -312,22 +361,33 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   children: [
                     Text('Step-free route', style: text.titleMedium),
                     Text(
-                      'Use the lift instead of stairs',
-                      style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                      _noStepFreeRoute
+                          ? 'Not available here: stairs only'
+                          : _stepFree
+                              ? 'On for this route: lifts and ramps only'
+                              : 'Off: turn on to avoid stairs',
+                      style: text.bodySmall?.copyWith(
+                        color: _noStepFreeRoute ? AppColors.danger : AppColors.inkMuted,
+                      ),
                     ),
                   ],
                 ),
               ),
-              ValueListenableBuilder<bool>(
-                valueListenable: AppState.stepFree,
-                builder: (context, value, _) => Switch(
-                  value: value,
-                  onChanged: (v) {
-                    AppState.setStepFree(v);
-                    _retry(); // ask for a new route
-                  },
+              if (_stepFreeBusy)
+                const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  ),
+                )
+              else
+                Switch(
+                  value: _stepFree,
+                  // Greyed out once we know this place has no step-free way in.
+                  onChanged: _noStepFreeRoute ? null : _setStepFree,
                 ),
-              ),
             ],
           ),
         ),
