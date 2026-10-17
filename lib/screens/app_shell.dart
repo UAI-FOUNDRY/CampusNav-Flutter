@@ -44,7 +44,7 @@ class _AppShellState extends State<AppShell> {
         children: [
           const HomeScreen(),
           // Real OpenStreetMap + floor plan with the backend, schematic map in demo mode.
-          if (ApiService.useMock) const MapScreen() else const LiveMapScreen(),
+          if (ApiService.useMock) const MapScreen() else LiveMapScreen(active: _index == 1),
         ],
       ),
       bottomNavigationBar: NavigationBar(

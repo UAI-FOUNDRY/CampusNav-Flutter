@@ -310,11 +310,34 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                                 ? null
                                 : () => widget.onPinTap!(d),
                             // Each kind of place has its own line colour.
-                            child: Icon(
-                              Icons.location_on,
-                              size: 32,
-                              color: colorForType(d.type),
-                              shadows: const [Shadow(color: Colors.white, blurRadius: 3)],
+                            // Pin in the line colour with the category icon in
+                            // its head, so it is not told apart by colour alone.
+                            child: Stack(
+                              alignment: Alignment.topCenter,
+                              children: [
+                                Icon(
+                                  Icons.location_on,
+                                  size: 40,
+                                  color: colorForType(d.type),
+                                  shadows: const [Shadow(color: Colors.white, blurRadius: 3)],
+                                ),
+                                Positioned(
+                                  top: 7,
+                                  child: Container(
+                                    width: 18,
+                                    height: 18,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      iconForType(d.type),
+                                      size: 12,
+                                      color: lineInk(colorForType(d.type)),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           ),

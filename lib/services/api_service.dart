@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/mock_campus.dart';
 import '../models/destination.dart';
@@ -15,7 +16,16 @@ class CampusCatalog {
   final List<FloorInfo> floors;
   final String? version;
 
-  const CampusCatalog({required this.places, required this.floors, this.version});
+  /// True when the server could not be reached and this is the copy saved
+  /// on the phone from last time (routes still need the server).
+  final bool offline;
+
+  const CampusCatalog({
+    required this.places,
+    required this.floors,
+    this.version,
+    this.offline = false,
+  });
 }
 
 /// What kind of problem it was, so the screen can show the right picture
@@ -99,28 +109,8 @@ class ApiService {
 
     CampusCatalog result;
     try {
-      final data = await _send(http.get(Uri.parse('$baseUrl/api/graph')),
-          timeout: const Duration(seconds: 15));
-      if (data is! Map || data['rooms'] is! List || data['nodes'] is! List) {
-        throw const ApiException('The server sent data the app could not read.');
-      }
-      final nodes = <String, Map>{
-        for (final n in data['nodes'] as List)
-          if (n is Map && n['id'] != null) n['id'].toString(): n,
-      };
-      final places = (data['rooms'] as List)
-          .whereType<Map>()
-          .map((r) => Destination.fromGraph(r, nodes))
-          .whereType<Destination>()
-          .where(_isSearchable)
-          .toList()
-        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      result = CampusCatalog(
-        places: places,
-        floors: _floorsFrom(data['floors']),
-        version: data['version']?.toString(),
-      );
-    } on ApiException {
+      result = await _graphCatalog();
+    } on _NoGraph {
       // Older backend: the first 50 places and the floors endpoint.
       final uri = Uri.parse('$baseUrl/api/rooms')
           .replace(queryParameters: {'q': '', 'limit': '50'});
@@ -134,8 +124,97 @@ class ApiService {
       }
       result = CampusCatalog(places: places, floors: floors);
     }
-    _catalogAt = DateTime.now();
+    // A saved offline copy is kept for one minute only, so the app tries the
+    // server again soon.
+    _catalogAt = result.offline
+        ? DateTime.now().subtract(const Duration(minutes: 4))
+        : DateTime.now();
     return _catalog = result;
+  }
+
+  static const _graphKey = 'graph.body';
+  static const _graphTagKey = 'graph.etag';
+
+  /// GET /api/graph, saved on the phone. The saved copy's ETag goes with the
+  /// request, so an unchanged map costs a tiny 304 instead of 170 KB. With no
+  /// connection the saved copy is used (marked [CampusCatalog.offline]).
+  /// Throws [_NoGraph] when the server has no /api/graph (older backend).
+  Future<CampusCatalog> _graphCatalog() async {
+    SharedPreferences? prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (_) {
+      prefs = null; // storage unavailable: just use the network
+    }
+    final savedBody = prefs?.getString(_graphKey);
+    final savedTag = prefs?.getString(_graphTagKey);
+
+    http.Response response;
+    try {
+      response = await http.get(
+        Uri.parse('$baseUrl/api/graph'),
+        headers: {if (savedBody != null && savedTag != null) 'If-None-Match': savedTag},
+      ).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      // Offline or timed out: the saved map still lets people browse.
+      if (savedBody != null) return _parseGraph(savedBody, offline: true);
+      _offlineError();
+    }
+
+    if (response.statusCode == 304 && savedBody != null) {
+      return _parseGraph(savedBody);
+    }
+    if (response.statusCode == 404) throw const _NoGraph();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (savedBody != null) return _parseGraph(savedBody, offline: true);
+      throw _errorFrom(response);
+    }
+    final catalog = _parseGraph(response.body);
+    final tag = response.headers['etag'];
+    if (prefs != null) {
+      await prefs.setString(_graphKey, response.body);
+      if (tag != null) {
+        await prefs.setString(_graphTagKey, tag);
+      } else {
+        await prefs.remove(_graphTagKey);
+      }
+    }
+    return catalog;
+  }
+
+  /// Never returns: the "could not reach the server" error.
+  Never _offlineError() => throw const ApiException(
+        'Could not reach the server. Check that you are online (campus Wi-Fi or data).',
+        ApiErrorKind.offline,
+      );
+
+  CampusCatalog _parseGraph(String body, {bool offline = false}) {
+    dynamic data;
+    try {
+      data = jsonDecode(body);
+    } on FormatException {
+      throw const ApiException('The server sent data the app could not read.');
+    }
+    if (data is! Map || data['rooms'] is! List || data['nodes'] is! List) {
+      throw const ApiException('The server sent data the app could not read.');
+    }
+    final nodes = <String, Map>{
+      for (final n in data['nodes'] as List)
+        if (n is Map && n['id'] != null) n['id'].toString(): n,
+    };
+    final places = (data['rooms'] as List)
+        .whereType<Map>()
+        .map((r) => Destination.fromGraph(r, nodes))
+        .whereType<Destination>()
+        .where(_isSearchable)
+        .toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return CampusCatalog(
+      places: places,
+      floors: _floorsFrom(data['floors']),
+      version: data['version']?.toString(),
+      offline: offline,
+    );
   }
 
   /// Floor list from {"floors": [...]} or a plain list. Never empty.
@@ -336,4 +415,9 @@ class ApiService {
         );
     }
   }
+}
+
+/// The server has no /api/graph (an older backend).
+class _NoGraph implements Exception {
+  const _NoGraph();
 }

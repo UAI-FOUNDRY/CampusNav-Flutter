@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../data/campus.dart';
+import '../data/deep_link.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../widgets/slide_route.dart';
+import 'deep_link_screen.dart';
 
 /// Opens the QR scanner. [onManual] runs if the user taps "Choose manually".
 ///
@@ -41,7 +43,19 @@ class _ScanScreenState extends State<ScanScreen> {
       final raw = barcode.rawValue;
       if (raw == null) continue;
 
-      final point = Campus.startPointFromCode(raw);
+      // A poster link ("campusnav://campus/to/library"): open the route.
+      final link = raw.contains('://') ? DeepLink.parse(raw) : null;
+      if (link != null && link.to != null) {
+        _handled = true;
+        HapticFeedback.mediumImpact();
+        final navigator = Navigator.of(context);
+        navigator.pop();
+        navigator.push(MaterialPageRoute<void>(builder: (_) => DeepLinkScreen(link: link)));
+        return;
+      }
+      final code = link?.from ?? raw;
+
+      final point = Campus.startPointFromCode(code);
       if (point == null) {
         _showInvalid();
         return;

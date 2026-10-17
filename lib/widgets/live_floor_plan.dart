@@ -182,6 +182,9 @@ class LiveFloorPlan extends StatelessWidget {
         final still = MediaQuery.of(context).disableAnimations;
         // Names once the plan is drawn at least 1.5 screen px per picture px.
         final showLabels = s * zoom >= 1.5;
+        // Category icons inside the dots once they are big enough to read,
+        // so the kind of place never depends on colour alone.
+        final showIcons = s * zoom >= 0.8;
 
         return Stack(
           clipBehavior: Clip.none,
@@ -228,9 +231,9 @@ class LiveFloorPlan extends StatelessWidget {
               ),
             // The selected pin is drawn last, so it sits on top of the others.
             for (final pin in pins)
-              if (!pin.selected) ..._pinWidgets(pin, s, k, showLabels),
+              if (!pin.selected) ..._pinWidgets(pin, s, k, showLabels, showIcons),
             for (final pin in pins)
-              if (pin.selected) ..._pinWidgets(pin, s, k, true),
+              if (pin.selected) ..._pinWidgets(pin, s, k, true, true),
             // Start: a small dark dot.
             if (me == null && points.isNotEmpty)
               _at(
@@ -305,12 +308,14 @@ class LiveFloorPlan extends StatelessWidget {
     );
   }
 
-  List<Widget> _pinWidgets(FloorPin pin, double s, double k, bool showLabel) {
+  List<Widget> _pinWidgets(FloorPin pin, double s, double k, bool showLabel, bool showIcon) {
     const hit = 44.0; // the minimum finger-sized tap area around the small dot
     final x = pin.x * s;
     final y = pin.y * s;
     final c = pin.color ?? color;
     final big = _pin + 12;
+    final withIcon = showIcon && pin.icon != null;
+    final size = pin.selected ? big : (withIcon ? _pin + 6 : _pin);
     return [
       _at(
         x,
@@ -332,8 +337,8 @@ class LiveFloorPlan extends StatelessWidget {
             child: Center(
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                width: pin.selected ? big : _pin,
-                height: pin.selected ? big : _pin,
+                width: size,
+                height: size,
                 decoration: BoxDecoration(
                   color: c,
                   shape: BoxShape.circle,
@@ -345,8 +350,8 @@ class LiveFloorPlan extends StatelessWidget {
                       BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 0, spreadRadius: 6),
                   ],
                 ),
-                child: pin.selected && pin.icon != null
-                    ? Icon(pin.icon, size: 15, color: readableOnLine(c))
+                child: withIcon
+                    ? Icon(pin.icon, size: pin.selected ? 15 : 12, color: readableOnLine(c))
                     : null,
               ),
             ),

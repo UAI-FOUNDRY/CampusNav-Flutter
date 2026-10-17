@@ -337,12 +337,43 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           if (results.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 40),
-              child: EmptyView(
-                icon: Icons.search_off,
-                title: 'No destination found',
-                message: 'Try another name, or clear the filter.',
+            Padding(
+              padding: const EdgeInsets.only(top: 24),
+              child: Column(
+                children: [
+                  EmptyView(
+                    icon: Icons.search_off,
+                    title: _query.trim().isEmpty
+                        ? 'Nothing in $_category yet'
+                        : 'No place called "${_query.trim()}"',
+                    message: _category != 'All'
+                        ? 'It may be in another category.'
+                        : 'Try a room number, or one of these:',
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (_category != 'All')
+                        ActionChip(
+                          avatar: const Icon(Icons.filter_alt_off, size: 18),
+                          label: Text('Search all, not just $_category'),
+                          onPressed: () => setState(() => _category = 'All'),
+                        )
+                      else
+                        for (final hint in const ['Lab', 'Washroom', 'Cafeteria', 'Library', 'Admin', 'Everest'])
+                          ActionChip(
+                            label: Text(hint),
+                            onPressed: () {
+                              _controller.text = hint;
+                              setState(() => _query = hint);
+                            },
+                          ),
+                    ],
+                  ),
+                ],
               ),
             )
           else

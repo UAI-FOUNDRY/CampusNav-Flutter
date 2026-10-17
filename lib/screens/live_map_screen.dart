@@ -26,7 +26,11 @@ import 'navigation_screen.dart';
 /// row picks the place (the map flies to it) and shows a card with a
 /// "Directions" button. (In demo mode the schematic [MapScreen] is used.)
 class LiveMapScreen extends StatefulWidget {
-  const LiveMapScreen({super.key});
+  /// False while another tab is showing (the tabs stay alive in an
+  /// IndexedStack), so this tab does not catch the back button then.
+  final bool active;
+
+  const LiveMapScreen({super.key, this.active = true});
 
   @override
   State<LiveMapScreen> createState() => _LiveMapScreenState();
@@ -48,6 +52,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   ApiErrorKind _errorKind = ApiErrorKind.server;
   int _mode = 1; // 0 = outdoors, 1 = indoors (most places are inside)
   int _floor = 0;
+  bool _offline = false; // showing the map saved on the phone
   Destination? _selected;
   String _query = '';
 
@@ -75,6 +80,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
       setState(() {
         _all = catalog.places;
         _floors = catalog.floors;
+        _offline = catalog.offline;
         if (!_floors.any((f) => f.floor == _floor)) _floor = _floors.first.floor;
         _loading = false;
         _error = null;
@@ -196,7 +202,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
 
     // Back closes the place card first.
     return PopScope(
-      canPop: _selected == null,
+      canPop: !widget.active || _selected == null,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _clearSelection();
       },
@@ -207,7 +213,22 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-              child: Text('Campus map', style: text.headlineSmall),
+              child: Row(
+                children: [
+                  Expanded(child: Text('Campus map', style: text.headlineSmall)),
+                  if (_offline)
+                    Semantics(
+                      label: 'Offline. Showing the map saved on this phone. Tap to try again',
+                      button: true,
+                      excludeSemantics: true,
+                      child: ActionChip(
+                        avatar: const Icon(Icons.cloud_off, size: 16),
+                        label: const Text('Offline · saved map'),
+                        onPressed: () => _fetch(refresh: true),
+                      ),
+                    ),
+                ],
+              ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
@@ -563,13 +584,15 @@ class _LineChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // The line's icon in its colour: the same mark as the dots.
               if (selected)
                 Icon(icon, size: 16, color: fg)
               else
                 Container(
-                  width: 12,
-                  height: 12,
+                  width: 20,
+                  height: 20,
                   decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                  child: Icon(icon, size: 12, color: readableOnLine(color)),
                 ),
               const SizedBox(width: 7),
               Text(
