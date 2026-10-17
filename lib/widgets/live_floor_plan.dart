@@ -15,11 +15,15 @@ class FloorPin {
   final double y;
   final VoidCallback onTap;
 
+  /// The place picked on the map: a bigger dot with its name always shown.
+  final bool selected;
+
   const FloorPin({
     required this.label,
     required this.x,
     required this.y,
     required this.onTap,
+    this.selected = false,
   });
 }
 
@@ -156,7 +160,8 @@ class LiveFloorPlan extends StatelessWidget {
             );
 
         final marker = PersonMarker(color: color, size: 26);
-        final showLabels = zoom >= 2.6;
+        // Names once the plan is drawn at least 1.5 screen px per picture px.
+        final showLabels = s * zoom >= 1.5;
 
         return Stack(
           clipBehavior: Clip.none,
@@ -196,7 +201,11 @@ class LiveFloorPlan extends StatelessWidget {
                   ),
                 ),
               ),
-            for (final pin in pins) ..._pinWidgets(pin, s, k, showLabels),
+            // The selected pin is drawn last, so it sits on top of the others.
+            for (final pin in pins)
+              if (!pin.selected) ..._pinWidgets(pin, s, k, showLabels),
+            for (final pin in pins)
+              if (pin.selected) ..._pinWidgets(pin, s, k, true),
             // Start: a small dark dot.
             if (me == null && points.isNotEmpty)
               _at(
@@ -277,13 +286,14 @@ class LiveFloorPlan extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: pin.onTap,
             child: Center(
-              child: Container(
-                width: _pin,
-                height: _pin,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: pin.selected ? _pin + 10 : _pin,
+                height: pin.selected ? _pin + 10 : _pin,
                 decoration: BoxDecoration(
-                  color: color,
+                  color: pin.selected ? AppColors.ink : color,
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
+                  border: Border.all(color: Colors.white, width: pin.selected ? 3 : 2),
                   boxShadow: const [
                     BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
                   ],
@@ -296,7 +306,7 @@ class LiveFloorPlan extends StatelessWidget {
       // Names appear once zoomed in far enough for them to fit.
       if (showLabel)
         Positioned(
-          left: x + 10 * k,
+          left: x + (pin.selected ? 16 : 10) * k,
           top: y - 9 * k,
           child: IgnorePointer(
             child: Transform.scale(

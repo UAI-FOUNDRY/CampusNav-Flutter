@@ -14,6 +14,7 @@ import '../theme/destination_style.dart';
 import '../widgets/app_card.dart';
 import '../widgets/campus_map.dart';
 import '../widgets/floor_plan.dart';
+import '../widgets/floor_plan_viewer.dart';
 import '../widgets/floor_selector.dart';
 import '../widgets/live_floor_plan.dart';
 import '../widgets/live_route_map.dart';
@@ -23,7 +24,7 @@ import '../widgets/report_sheet.dart';
 import '../widgets/route_strip.dart';
 import '../widgets/segment_toggle.dart';
 import '../widgets/state_views.dart';
-import '../widgets/zoomable_view.dart';
+import 'route_map_screen.dart';
 
 /// Shows the route to one destination.
 ///
@@ -341,43 +342,75 @@ class _NavigationScreenState extends State<NavigationScreen> {
     ];
   }
 
-  /// Map tab for a route from the real backend: the outdoor line on
-  /// OpenStreetMap, then one floor plan per indoor leg.
+  /// Map tab for a route from the real backend: the outdoor line on the map,
+  /// then one floor plan per indoor leg. Each card opens full screen.
   List<Widget> _liveMapContent(NavigationRoute route, TextTheme text) {
-    final outdoor = route.outdoorPolyline;
-    final indoor = route.indoorLegs;
+    final parts = RouteMapPart.of(route);
+
+    Widget header(String title, int part) => Row(
+          children: [
+            Expanded(child: Text(title, style: text.titleMedium)),
+            TextButton.icon(
+              onPressed: () => _openRouteMap(route, part),
+              icon: const Icon(Icons.open_in_full, size: 18),
+              label: const Text('Full screen'),
+              style: TextButton.styleFrom(foregroundColor: lineInk(_line)),
+            ),
+          ],
+        );
 
     return [
-      if (outdoor.length > 1) ...[
-        Text('Outside', style: text.titleMedium),
-        const SizedBox(height: 12),
-        LiveCampusMap(route: outdoor, color: _line),
-        const SizedBox(height: 22),
-      ],
-      for (final leg in indoor) ...[
-        Text('Inside, ${floorLabel(leg.floor).toLowerCase()}', style: text.titleMedium),
-        const SizedBox(height: 12),
-        MapFrame(
-          aspectRatio: leg.imageWidth / leg.imageHeight,
-          zoomable: true,
-          // Opens zoomed onto this leg instead of the whole floor.
-          focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
-          builder: (context, zoom) => LiveFloorPlan(
-            image: leg.image!,
-            imageWidth: leg.imageWidth,
-            imageHeight: leg.imageHeight,
-            route: leg.points,
-            color: _line,
-            zoom: zoom,
-          ),
+      for (var i = 0; i < parts.length; i++) ...[
+        header(
+          parts[i].isOutdoor
+              ? 'Outside'
+              : 'Inside, ${floorLabel(parts[i].leg!.floor).toLowerCase()}',
+          i,
         ),
+        const SizedBox(height: 6),
+        if (parts[i].isOutdoor)
+          LiveCampusMap(route: route.outdoorPolyline, color: _line, height: 340)
+        else
+          _floorCard(parts[i].leg!),
         const SizedBox(height: 22),
       ],
-      if (outdoor.length <= 1 && indoor.isEmpty)
+      if (parts.isEmpty)
         AppCard(
           child: Text('There is no map for this route yet. Follow the steps.', style: text.bodyMedium),
         ),
     ];
+  }
+
+  /// A tall card with one floor's part of the route, opened zoomed onto it.
+  Widget _floorCard(RouteLeg leg) {
+    return Container(
+      height: 360,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.mist),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: FloorPlanViewer(
+        image: leg.image!,
+        imageWidth: leg.imageWidth,
+        imageHeight: leg.imageHeight,
+        route: leg.points,
+        color: _line,
+        focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
+        controls: false,
+      ),
+    );
+  }
+
+  void _openRouteMap(NavigationRoute route, int part) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => RouteMapScreen(
+        route: route,
+        title: widget.destination.name,
+        color: _line,
+        initialPart: part,
+      ),
+    ));
   }
 
   List<Widget> _mapContent(NavigationRoute route, TextTheme text) {
@@ -539,27 +572,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
         key = 'inside-${leg.floor}';
         child = Stack(
           children: [
+            // Pinch, double-tap or the buttons to zoom; opens on this floor's
+            // part of the route. Lines and the person icon keep their size.
             Positioned.fill(
-              child: Container(
-                color: AppColors.mapBackground,
-                // Pinch or double-tap to zoom the floor plan, drag to move it.
-                // Lines and the person icon keep their size on screen.
-                child: ZoomableView(
-                  builder: (context, zoom) => Center(
-                    child: AspectRatio(
-                      aspectRatio: leg.imageWidth / leg.imageHeight,
-                      child: LiveFloorPlan(
-                        image: leg.image!,
-                        imageWidth: leg.imageWidth,
-                        imageHeight: leg.imageHeight,
-                        route: leg.points,
-                        color: _line,
-                        person: MapPoint(step.x!, step.y!),
-                        zoom: zoom,
-                      ),
-                    ),
-                  ),
-                ),
+              child: FloorPlanViewer(
+                image: leg.image!,
+                imageWidth: leg.imageWidth,
+                imageHeight: leg.imageHeight,
+                route: leg.points,
+                color: _line,
+                person: MapPoint(step.x!, step.y!),
+                focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
               ),
             ),
             Positioned(

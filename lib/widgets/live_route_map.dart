@@ -42,6 +42,10 @@ class LiveCampusMap extends StatefulWidget {
   /// full-screen navigation view.
   final bool fill;
 
+  /// In [fill] mode: space kept clear at the bottom (a card over the map);
+  /// the round buttons and the attribution sit above it.
+  final double bottomInset;
+
   /// Where to look when there is no route to fit (Universal AI University).
   static const campus = LatLng(18.9027, 73.3742);
 
@@ -55,6 +59,7 @@ class LiveCampusMap extends StatefulWidget {
     this.person,
     this.follow = false,
     this.fill = false,
+    this.bottomInset = 0,
   });
 
   @override
@@ -318,7 +323,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
             if (widget.fill)
               Positioned(
                 right: 12,
-                bottom: 20,
+                bottom: 20 + widget.bottomInset,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [

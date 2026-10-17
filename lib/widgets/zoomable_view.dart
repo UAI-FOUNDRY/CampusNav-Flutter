@@ -21,6 +21,10 @@ class ZoomableView extends StatefulWidget {
   /// The most [focus] may zoom in, so a very short route keeps some context.
   final double maxFocusScale;
 
+  /// How much of the screen [focus] fills: 0.85 leaves a margin round a
+  /// route, 1 fills it exactly (e.g. "fill the height with the floor plan").
+  final double focusFill;
+
   const ZoomableView({
     super.key,
     required this.builder,
@@ -28,13 +32,15 @@ class ZoomableView extends StatefulWidget {
     this.maxScale = 6,
     this.focus,
     this.maxFocusScale = 3,
+    this.focusFill = 0.85,
   });
 
   @override
-  State<ZoomableView> createState() => _ZoomableViewState();
+  State<ZoomableView> createState() => ZoomableViewState();
 }
 
-class _ZoomableViewState extends State<ZoomableView>
+/// Public so a parent with a GlobalKey can drive the zoom buttons.
+class ZoomableViewState extends State<ZoomableView>
     with SingleTickerProviderStateMixin {
   final _controller = TransformationController();
   late final AnimationController _animation;
@@ -43,6 +49,7 @@ class _ZoomableViewState extends State<ZoomableView>
   double _zoom = 1;
   Size _size = Size.zero;
   bool _focusApplied = false;
+  bool _moved = false; // the user (or a button / showPoint) has moved the view
   Offset? _doubleTapAt;
 
   @override
@@ -61,7 +68,9 @@ class _ZoomableViewState extends State<ZoomableView>
   @override
   void didUpdateWidget(ZoomableView old) {
     super.didUpdateWidget(old);
-    if (old.focus != widget.focus) _focusApplied = false;
+    // A new starting view (e.g. the screen got shorter when the keyboard
+    // opened) is applied only if nobody has moved the view yet.
+    if (old.focus != widget.focus && !_moved) _focusApplied = false;
   }
 
   @override
@@ -94,25 +103,51 @@ class _ZoomableViewState extends State<ZoomableView>
     if (f == null || _size.isEmpty) return Matrix4.identity();
     final fw = math.max(f.width, 0.05);
     final fh = math.max(f.height, 0.05);
-    final s = math.min(widget.maxFocusScale, 0.85 * math.min(1 / fw, 1 / fh));
+    final s = math.min(widget.maxFocusScale, widget.focusFill * math.min(1 / fw, 1 / fh));
     if (s <= 1.05) return Matrix4.identity();
     final centre = Offset(f.center.dx * _size.width, f.center.dy * _size.height);
     return _matrix(s, centre, Offset(_size.width / 2, _size.height / 2));
   }
 
   void _animateTo(Matrix4 target) {
+    _moved = true;
     _tween = Matrix4Tween(begin: _controller.value.clone(), end: target).animate(
       CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic),
     );
     _animation.forward(from: 0);
   }
 
+  /// Current zoom (1 = the whole child fits).
+  double get zoom => _controller.value.getMaxScaleOnAxis();
+
+  /// Zoom in (factor > 1) or out around the middle of the view.
+  void zoomBy(double factor) {
+    if (_size.isEmpty) return;
+    final middle = Offset(_size.width / 2, _size.height / 2);
+    _animateTo(_matrix(zoom * factor, _controller.toScene(middle), middle));
+  }
+
+  /// Back to the starting view ([ZoomableView.focus], or everything).
+  void reset() => _animateTo(_home());
+
+  /// Zoomed all the way out: the whole child.
+  void showAll() => _animateTo(Matrix4.identity());
+
+  /// True when showing the starting view.
+  bool get atHome => (zoom - _home().getMaxScaleOnAxis()).abs() < 0.05;
+
+  /// Bring [point] (child coordinates) to [anchor] (fractions of the view,
+  /// default the middle), zoomed to at least [minZoom].
+  void showPoint(Offset point, {double minZoom = 2.5, Offset anchor = const Offset(0.5, 0.5)}) {
+    if (_size.isEmpty) return;
+    final s = math.max(zoom, minZoom);
+    _animateTo(_matrix(s, point, Offset(anchor.dx * _size.width, anchor.dy * _size.height)));
+  }
+
   void _onDoubleTap() {
-    final home = _home();
-    final atHome = (_controller.value.getMaxScaleOnAxis() - home.getMaxScaleOnAxis()).abs() < 0.05;
     final tap = _doubleTapAt;
     if (!atHome || tap == null) {
-      _animateTo(home);
+      reset();
       return;
     }
     // Zoom in 2.5x more, keeping the tapped spot under the finger.
@@ -128,7 +163,7 @@ class _ZoomableViewState extends State<ZoomableView>
         if (!_focusApplied && _size.isFinite && !_size.isEmpty) {
           _focusApplied = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
+            if (!mounted || _moved) return;
             _controller.value = _home();
           });
         }
@@ -137,6 +172,7 @@ class _ZoomableViewState extends State<ZoomableView>
           onDoubleTap: _onDoubleTap,
           child: InteractiveViewer(
             transformationController: _controller,
+            onInteractionStart: (_) => _moved = true,
             minScale: widget.minScale,
             maxScale: widget.maxScale,
             child: widget.builder(context, _zoom),
