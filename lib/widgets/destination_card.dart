@@ -67,7 +67,12 @@ class DestinationCard extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                destination.building,
+                                // "Inside the Library · Block A" for places within another.
+                                destination.withinName == null
+                                    ? destination.building
+                                    : 'Inside the ${destination.withinName} · ${destination.building}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
                               ),
                             ],

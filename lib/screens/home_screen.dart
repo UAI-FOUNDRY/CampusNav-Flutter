@@ -518,7 +518,7 @@ class _TripRow extends StatelessWidget {
                   style: text.titleMedium,
                 ),
                 Text(
-                  '${destination.building}, ${floorLabel(destination.floor)}',
+                  destination.locationLine,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: text.bodySmall?.copyWith(color: AppColors.inkMuted),

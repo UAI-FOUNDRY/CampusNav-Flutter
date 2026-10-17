@@ -1,9 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../models/route.dart';
 import '../theme/app_colors.dart';
 import 'person_marker.dart';
 import 'route_painter.dart';
+import 'zoomable_view.dart';
 
 /// A tappable dot on a floor plan (a place you can navigate to).
 class FloorPin {
@@ -20,11 +23,38 @@ class FloorPin {
   });
 }
 
+/// The part of a floor plan an indoor route covers, as fractions (0..1) of
+/// the picture, with some room around it. Give it to [MapFrame.focus].
+Rect? routeFocus(List<IndoorPoint> points, double imageWidth, double imageHeight) {
+  if (points.isEmpty || imageWidth <= 0 || imageHeight <= 0) return null;
+  var minX = points.first.x, maxX = minX, minY = points.first.y, maxY = minY;
+  for (final p in points) {
+    minX = math.min(minX, p.x);
+    maxX = math.max(maxX, p.x);
+    minY = math.min(minY, p.y);
+    maxY = math.max(maxY, p.y);
+  }
+  // At least a fifth of the picture, so a short route keeps its surroundings.
+  final w = math.max(maxX - minX, imageWidth * 0.2) + imageWidth * 0.08;
+  final h = math.max(maxY - minY, imageHeight * 0.2) + imageHeight * 0.08;
+  final cx = (minX + maxX) / 2;
+  final cy = (minY + maxY) / 2;
+  return Rect.fromCenter(
+    center: Offset(cx / imageWidth, cy / imageHeight),
+    width: w / imageWidth,
+    height: h / imageHeight,
+  );
+}
+
 /// A real floor-plan image with the route drawn on top.
 ///
 /// Every x/y the backend sends is in IMAGE pixels, so the whole drawing is
 /// scaled by `displayedWidth / imageWidth`. Put it inside a [MapFrame] whose
 /// aspectRatio is imageWidth / imageHeight.
+///
+/// Pass the [zoom] from [MapFrame.builder] / [ZoomableView]: lines, dots and
+/// markers are shrunk by it so zooming in shows more of the plan instead of
+/// fatter lines.
 ///
 /// The image must be bundled as assets/floorplans/<image> (see pubspec.yaml).
 class LiveFloorPlan extends StatelessWidget {
@@ -34,6 +64,7 @@ class LiveFloorPlan extends StatelessWidget {
   final List<IndoorPoint> route;
   final Color color;
   final List<FloorPin> pins;
+  final double zoom;
 
   /// Where the user is right now (guidance), in image pixels. The person icon
   /// glides to each new position and the part of the line already walked turns
@@ -49,19 +80,49 @@ class LiveFloorPlan extends StatelessWidget {
     this.color = AppColors.academic,
     this.pins = const [],
     this.person,
+    this.zoom = 1,
   });
+
+  // Sizes on screen at 1x zoom.
+  static const _line = 4.5;
+  static const _casing = 8.0;
+  static const _stop = 4.5; // station dot radius
+  static const _pin = 16.0;
+  static const _minStopGap = 34.0; // screen px between two station dots
+
+  /// Station dots: named places the route passes, but never two so close on
+  /// screen that they pile up (bends have no name and get no dot).
+  List<bool> _stops(double screenPerPixel) {
+    final flags = List<bool>.filled(route.length, false);
+    if (route.length < 3) return flags;
+    var last = route.first;
+    final end = route.last;
+    double gap(IndoorPoint a, IndoorPoint b) =>
+        math.sqrt(math.pow(a.x - b.x, 2) + math.pow(a.y - b.y, 2)) * screenPerPixel;
+    for (var i = 1; i < route.length - 1; i++) {
+      final p = route[i];
+      if (p.name.trim().isEmpty) continue;
+      if (gap(p, last) < _minStopGap || gap(p, end) < _minStopGap) continue;
+      flags[i] = true;
+      last = p;
+    }
+    return flags;
+  }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final s = constraints.maxWidth / imageWidth;
+        final k = zoomCompensation(zoom); // keeps overlays near screen size
         final points = [for (final p in route) MapPoint(p.x, p.y)];
+        final stops = _stops(s * zoom);
         final me = person;
 
         // Guidance: split the route into walked and still-to-walk parts.
         var walked = <MapPoint>[];
         var ahead = points;
+        var aheadStops = stops;
         if (me != null && points.length > 1) {
           var best = 0;
           var bestDistance = double.infinity;
@@ -76,15 +137,35 @@ class LiveFloorPlan extends StatelessWidget {
           }
           walked = [...points.sublist(0, best + 1), me];
           ahead = [me, ...points.sublist(best + 1)];
+          aheadStops = [false, ...stops.sublist(best + 1)];
         }
-        final marker = PersonMarker(color: color, size: 30);
+
+        RoutePainter painter(List<MapPoint> pts, Color c,
+                {List<bool>? stopFlags, double progress = 1}) =>
+            RoutePainter(
+              points: pts,
+              scale: s,
+              color: c,
+              strokeWidth: _line * k,
+              casingWidth: _casing * k,
+              dots: stopFlags != null,
+              stops: stopFlags,
+              dotRadius: _stop * k,
+              ringWidth: 2 * k,
+              progress: progress,
+            );
+
+        final marker = PersonMarker(color: color, size: 26);
+        final showLabels = zoom >= 2.6;
 
         return Stack(
+          clipBehavior: Clip.none,
           children: [
             Positioned.fill(
               child: Image.asset(
                 'assets/floorplans/$image',
                 fit: BoxFit.fill,
+                filterQuality: FilterQuality.medium,
                 errorBuilder: (context, error, stack) => const Center(
                   child: Padding(
                     padding: EdgeInsets.all(16),
@@ -98,26 +179,11 @@ class LiveFloorPlan extends StatelessWidget {
             ),
             if (walked.length > 1)
               Positioned.fill(
-                child: CustomPaint(
-                  painter: RoutePainter(
-                    points: walked,
-                    scale: s,
-                    color: Colors.grey.shade500,
-                    strokeWidth: 6,
-                  ),
-                ),
+                child: CustomPaint(painter: painter(walked, Colors.grey.shade500)),
               ),
             if (me != null && ahead.length > 1)
               Positioned.fill(
-                child: CustomPaint(
-                  painter: RoutePainter(
-                    points: ahead,
-                    scale: s,
-                    color: color,
-                    strokeWidth: 6,
-                    dots: true,
-                  ),
-                ),
+                child: CustomPaint(painter: painter(ahead, color, stopFlags: aheadStops)),
               ),
             if (me == null && points.length > 1)
               Positioned.fill(
@@ -126,57 +192,40 @@ class LiveFloorPlan extends StatelessWidget {
                   duration: const Duration(milliseconds: 1200),
                   curve: Curves.easeInOut,
                   builder: (context, t, _) => CustomPaint(
-                    painter: RoutePainter(
-                      points: points,
-                      scale: s,
-                      color: color,
-                      strokeWidth: 6,
-                      dots: true,
-                      progress: t,
-                    ),
+                    painter: painter(points, color, stopFlags: stops, progress: t),
                   ),
                 ),
               ),
-            for (final pin in pins)
-              Positioned(
-                left: pin.x * s - 14,
-                top: pin.y * s - 14,
-                width: 28,
-                height: 28,
-                child: Tooltip(
-                  message: pin.label,
-                  child: GestureDetector(
-                    onTap: pin.onTap,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.85),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: const Icon(Icons.near_me, size: 14, color: Colors.white),
-                    ),
-                  ),
-                ),
-              ),
+            for (final pin in pins) ..._pinWidgets(pin, s, k, showLabels),
+            // Start: a small dark dot.
             if (me == null && points.isNotEmpty)
-              Positioned(
-                left: points.first.x * s - 9,
-                top: points.first.y * s - 9,
+              _at(
+                points.first.x * s,
+                points.first.y * s,
+                size: 14,
+                k: k,
                 child: Container(
-                  width: 18,
-                  height: 18,
                   decoration: BoxDecoration(
                     color: AppColors.ink,
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 3),
+                    border: Border.all(color: Colors.white, width: 2.5),
                   ),
                 ),
               ),
+            // Destination: a pin whose tip sits on the door.
             if (points.length > 1)
-              Positioned(
-                left: points.last.x * s - 16,
-                top: points.last.y * s - 32,
-                child: Icon(Icons.location_on, size: 32, color: color),
+              _at(
+                points.last.x * s,
+                points.last.y * s,
+                size: 30,
+                k: k,
+                tip: true,
+                child: Icon(
+                  Icons.location_on,
+                  size: 30,
+                  color: color,
+                  shadows: const [Shadow(color: Colors.white, blurRadius: 4)],
+                ),
               ),
             // You are here: slides smoothly from one step to the next.
             if (me != null)
@@ -185,11 +234,93 @@ class LiveFloorPlan extends StatelessWidget {
                 curve: Curves.easeInOut,
                 left: me.x * s - marker.outerSize / 2,
                 top: me.y * s - marker.outerSize / 2,
-                child: marker,
+                width: marker.outerSize,
+                height: marker.outerSize,
+                child: Transform.scale(scale: k, child: marker),
               ),
           ],
         );
       },
     );
+  }
+
+  /// A [size] x [size] widget centred on (x, y), or with its bottom centre on
+  /// it when [tip] is true, shrunk by [k] around that anchor.
+  Widget _at(double x, double y,
+      {required double size, required double k, required Widget child, bool tip = false}) {
+    return Positioned(
+      left: x - size / 2,
+      top: tip ? y - size : y - size / 2,
+      width: size,
+      height: size,
+      child: Transform.scale(
+        scale: k,
+        alignment: tip ? Alignment.bottomCenter : Alignment.center,
+        child: child,
+      ),
+    );
+  }
+
+  List<Widget> _pinWidgets(FloorPin pin, double s, double k, bool showLabel) {
+    const hit = 30.0; // finger-sized tap area around the small dot
+    final x = pin.x * s;
+    final y = pin.y * s;
+    return [
+      _at(
+        x,
+        y,
+        size: hit,
+        k: k,
+        child: Tooltip(
+          message: pin.label,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: pin.onTap,
+            child: Center(
+              child: Container(
+                width: _pin,
+                height: _pin,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      // Names appear once zoomed in far enough for them to fit.
+      if (showLabel)
+        Positioned(
+          left: x + 10 * k,
+          top: y - 9 * k,
+          child: IgnorePointer(
+            child: Transform.scale(
+              scale: k,
+              alignment: Alignment.topLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  pin.label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.ink,
+                    height: 1.2,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+    ];
   }
 }

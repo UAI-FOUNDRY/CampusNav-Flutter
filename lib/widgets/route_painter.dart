@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/route.dart';
 
 /// Draws a route like a metro line: a coloured line with a white outline,
-/// and optional "station" dots at every bend.
+/// and optional "station" dots: at every bend, or only where [stops] is true.
 ///
 /// [progress] goes from 0 to 1 and draws only that fraction of the route,
 /// which is how the line "draws itself" when it is animated.
@@ -16,6 +16,18 @@ class RoutePainter extends CustomPainter {
   final bool dots;
   final double progress;
 
+  /// Same length as [points]: which ones get a station dot. Null = all
+  /// intermediate points (the demo map).
+  final List<bool>? stops;
+
+  /// White outline width on each side is (casing - strokeWidth) / 2.
+  /// Null = strokeWidth + 5.
+  final double? casingWidth;
+
+  /// Station dot radius and ring width. Null = based on [strokeWidth].
+  final double? dotRadius;
+  final double? ringWidth;
+
   const RoutePainter({
     required this.points,
     required this.scale,
@@ -23,6 +35,10 @@ class RoutePainter extends CustomPainter {
     this.strokeWidth = 6,
     this.dots = false,
     this.progress = 1,
+    this.stops,
+    this.casingWidth,
+    this.dotRadius,
+    this.ringWidth,
   });
 
   /// The first [t] (0..1) of a path's length.
@@ -47,7 +63,7 @@ class RoutePainter extends CustomPainter {
     final casing = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth + 5
+      ..strokeWidth = casingWidth ?? strokeWidth + 5
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final line = Paint()
@@ -75,13 +91,16 @@ class RoutePainter extends CustomPainter {
       final ring = Paint()
         ..color = color
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 3;
+        ..strokeWidth = ringWidth ?? 3;
+      final radius = dotRadius ?? strokeWidth * 0.95;
+      final only = stops;
       // Intermediate points only: the start and end have their own markers.
       for (var i = 1; i < points.length - 1; i++) {
         if (total > 0 && along[i] / total > progress) break;
+        if (only != null && (i >= only.length || !only[i])) continue;
         final centre = Offset(points[i].x * scale, points[i].y * scale);
-        canvas.drawCircle(centre, strokeWidth * 0.95, fill);
-        canvas.drawCircle(centre, strokeWidth * 0.95, ring);
+        canvas.drawCircle(centre, radius, fill);
+        canvas.drawCircle(centre, radius, ring);
       }
     }
   }
@@ -92,5 +111,8 @@ class RoutePainter extends CustomPainter {
       old.scale != scale ||
       old.color != color ||
       old.strokeWidth != strokeWidth ||
+      old.casingWidth != casingWidth ||
+      old.dotRadius != dotRadius ||
+      old.stops != stops ||
       old.progress != progress;
 }

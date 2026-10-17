@@ -23,6 +23,7 @@ import '../widgets/report_sheet.dart';
 import '../widgets/route_strip.dart';
 import '../widgets/segment_toggle.dart';
 import '../widgets/state_views.dart';
+import '../widgets/zoomable_view.dart';
 
 /// Shows the route to one destination.
 ///
@@ -359,12 +360,15 @@ class _NavigationScreenState extends State<NavigationScreen> {
         MapFrame(
           aspectRatio: leg.imageWidth / leg.imageHeight,
           zoomable: true,
-          child: LiveFloorPlan(
+          // Opens zoomed onto this leg instead of the whole floor.
+          focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
+          builder: (context, zoom) => LiveFloorPlan(
             image: leg.image!,
             imageWidth: leg.imageWidth,
             imageHeight: leg.imageHeight,
             route: leg.points,
             color: _line,
+            zoom: zoom,
           ),
         ),
         const SizedBox(height: 22),
@@ -522,13 +526,15 @@ class _NavigationScreenState extends State<NavigationScreen> {
         fill: true,
       );
     } else {
-      RouteLeg? leg;
+      RouteLeg? found;
       for (final l in route.indoorLegs) {
         if (l.floor == (step.floor ?? 0)) {
-          leg = l;
+          found = l;
           break;
         }
       }
+      // final, so the null check below still holds inside the zoom builder.
+      final leg = found;
       if (leg != null && step.x != null && step.y != null) {
         key = 'inside-${leg.floor}';
         child = Stack(
@@ -536,11 +542,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
             Positioned.fill(
               child: Container(
                 color: AppColors.mapBackground,
-                // Pinch to zoom the floor plan, drag to move it.
-                child: InteractiveViewer(
-                  minScale: 1,
-                  maxScale: 4,
-                  child: Center(
+                // Pinch or double-tap to zoom the floor plan, drag to move it.
+                // Lines and the person icon keep their size on screen.
+                child: ZoomableView(
+                  builder: (context, zoom) => Center(
                     child: AspectRatio(
                       aspectRatio: leg.imageWidth / leg.imageHeight,
                       child: LiveFloorPlan(
@@ -550,6 +555,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                         route: leg.points,
                         color: _line,
                         person: MapPoint(step.x!, step.y!),
+                        zoom: zoom,
                       ),
                     ),
                   ),

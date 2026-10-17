@@ -1,19 +1,33 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
+import 'zoomable_view.dart';
 
 /// The rounded container around a map or floor plan.
-/// With [zoomable] the content can be pinched and dragged.
+///
+/// With [zoomable] the content can be pinched, dragged and double-tapped.
+/// Pass [builder] instead of [child] to get the current zoom, so line widths
+/// and markers can stay the same size on screen (see [zoomCompensation]).
+/// [focus] opens the view zoomed onto that part of the content (fractions).
 class MapFrame extends StatelessWidget {
   final double aspectRatio;
-  final Widget child;
+  final Widget? child;
+  final Widget Function(BuildContext context, double zoom)? builder;
   final bool zoomable;
+  final Rect? focus;
+  final double maxScale;
 
   const MapFrame({
     super.key,
     required this.aspectRatio,
-    required this.child,
+    this.child,
+    this.builder,
     this.zoomable = false,
-  });
+    this.focus,
+    this.maxScale = 6,
+  }) : assert(child != null || builder != null, 'Give MapFrame a child or a builder');
+
+  Widget _content(BuildContext context, double zoom) =>
+      builder != null ? builder!(context, zoom) : child!;
 
   @override
   Widget build(BuildContext context) {
@@ -27,8 +41,8 @@ class MapFrame extends StatelessWidget {
       child: AspectRatio(
         aspectRatio: aspectRatio,
         child: zoomable
-            ? InteractiveViewer(minScale: 1, maxScale: 4, child: child)
-            : child,
+            ? ZoomableView(builder: _content, focus: focus, maxScale: maxScale)
+            : _content(context, 1),
       ),
     );
   }
