@@ -124,6 +124,10 @@ class RouteStep {
   final double? x;
   final double? y;
 
+  /// Graph node where this step starts (live routes), e.g. "a0_stair_b".
+  /// Lets a scanned QR code jump guidance to the right step.
+  final String? nodeId;
+
   const RouteStep({
     required this.type,
     required this.title,
@@ -135,6 +139,7 @@ class RouteStep {
     this.lng,
     this.x,
     this.y,
+    this.nodeId,
   });
 
   bool get isFloorChange => type == 'stairs' || type == 'lift';
@@ -192,6 +197,7 @@ class RouteStep {
       lng: _asDouble(json['lng']),
       x: _asDouble(json['x']),
       y: _asDouble(json['y']),
+      nodeId: json['node_id']?.toString(),
     );
   }
 
@@ -208,6 +214,7 @@ class RouteStep {
         lng: other.lng,
         x: other.x,
         y: other.y,
+        nodeId: other.nodeId,
       );
 }
 

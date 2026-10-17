@@ -52,6 +52,9 @@ class LiveCampusMap extends StatefulWidget {
   /// Space kept clear at the top (chips over the map); the compass sits below.
   final double topInset;
 
+  /// How long the person icon takes to glide to a new [person] position.
+  final Duration glide;
+
   /// Where to look when there is no route to fit (Universal AI University).
   static const campus = LatLng(18.9027, 73.3742);
 
@@ -67,6 +70,7 @@ class LiveCampusMap extends StatefulWidget {
     this.fill = false,
     this.bottomInset = 0,
     this.topInset = 0,
+    this.glide = const Duration(milliseconds: 1400),
   });
 
   @override
@@ -118,6 +122,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     final from = _me;
     final to = LatLng(now.lat, now.lng);
     _glide = from == null ? [to] : _pathAlong(_line, from, to);
+    _anim.duration = widget.glide;
     _anim.forward(from: 0);
   }
 

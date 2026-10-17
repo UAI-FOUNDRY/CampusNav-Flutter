@@ -38,7 +38,7 @@ The current Flutter application includes:
 - [x] Multi-floor route visualization
 - [x] Loading, error, and empty states with retry
 - [x] Animated route line, page transitions, and animated step guidance
-- [x] "Simulate walk" demo mode and haptic feedback on step changes
+- [x] Haptic feedback on step changes
 - [x] Saved places, recent places, and a remembered start location
 - [x] Step-free route option (lift instead of stairs)
 - [x] Report-a-problem sheet
@@ -48,7 +48,7 @@ The current Flutter application includes:
 - [ ] Real campus data (GeoJSON, replacing the schematic map)
 - [x] Flask backend integration (search, route, estimates, report), real OpenStreetMap route line and floor-plan image
 - [x] QR scanning for the start location (camera, with a manual fallback)
-- [ ] Real-time positioning (guidance is simulated with a "Next step" button)
+- [x] Live GPS guidance outside (follows you, moves to the next step by itself, reroutes when you go off the path); inside: "Next" or scan a sign
 
 ## Running the app
 

@@ -39,29 +39,8 @@ class LocationService {
       );
     }
 
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      return const LocateResult.fail(
-        LocateProblem.serviceOff,
-        'Location is turned off on this phone.',
-      );
-    }
-
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    if (permission == LocationPermission.deniedForever) {
-      return const LocateResult.fail(
-        LocateProblem.deniedForever,
-        'Location access is blocked for this app. Allow it in Settings to start from where you are.',
-      );
-    }
-    if (permission == LocationPermission.denied) {
-      return const LocateResult.fail(
-        LocateProblem.denied,
-        'Without location access the app cannot tell where you are. Pick a place or scan a QR code instead.',
-      );
-    }
+    final blocked = await permissionProblem();
+    if (blocked != null) return blocked;
 
     final Position position;
     try {
@@ -116,6 +95,43 @@ class LocationService {
     );
     return LocateResult.ok(point, 'Starting from your location, near ${near.name}.');
   }
+
+  /// Location on and allowed (asks once if needed)? Null when fine,
+  /// otherwise what is wrong.
+  static Future<LocateResult?> permissionProblem() async {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      return const LocateResult.fail(
+        LocateProblem.serviceOff,
+        'Location is turned off on this phone.',
+      );
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.deniedForever) {
+      return const LocateResult.fail(
+        LocateProblem.deniedForever,
+        'Location access is blocked for this app. Allow it in Settings to use your location.',
+      );
+    }
+    if (permission == LocationPermission.denied) {
+      return const LocateResult.fail(
+        LocateProblem.denied,
+        'Without location access the app cannot tell where you are. Pick a place or scan a QR code instead.',
+      );
+    }
+    return null;
+  }
+
+  /// Live positions while guiding: the best accuracy, a new fix every couple
+  /// of metres walked.
+  static Stream<Position> follow() => Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 2,
+        ),
+      );
 
   static Future<void> openLocationSettings() => Geolocator.openLocationSettings();
 

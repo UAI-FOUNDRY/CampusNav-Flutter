@@ -3,11 +3,14 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart' show Position;
 import '../data/mock_campus.dart';
 import '../models/destination.dart';
 import '../models/route.dart';
 import '../models/start_point.dart';
 import '../services/api_service.dart';
+import '../services/location_service.dart';
+import '../services/route_tracker.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
@@ -26,11 +29,12 @@ import '../widgets/segment_toggle.dart';
 import '../widgets/start_location_sheet.dart';
 import '../widgets/state_views.dart';
 import 'route_map_screen.dart';
+import 'scan_screen.dart';
 
 /// Shows the route to one destination.
 ///
 /// Three stages: overview (steps or map) -> guidance (one step at a time,
-/// simulated until real positioning exists) -> arrival.
+/// followed by GPS outside, Next / QR signs inside) -> arrival.
 class NavigationScreen extends StatefulWidget {
   final Destination destination;
 
@@ -76,9 +80,20 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _arrived = false;
   int _stepIndex = 0;
 
-  // "Simulate walk": a timer that moves to the next step by itself.
-  Timer? _timer;
-  bool _simulating = false;
+  // ---- live GPS guidance (outside) ----
+  // Outside, the phone's GPS moves the person icon along the path, moves on
+  // to the next step by itself and finds a new route if you go off the path.
+  // Inside (GPS is not good enough there) you tap Next or scan a sign.
+  StreamSubscription<Position>? _gps;
+  _Gps _gpsState = _Gps.off;
+  LocateResult? _gpsProblem;
+  RouteGeometry? _geometry;
+  GeoPoint? _livePos; // where the person icon is (moved onto the path)
+  double? _liveStepLeft; // metres to the end of the current step
+  double? _gpsAccuracy;
+  int _offRouteFixes = 0;
+  bool _rerouting = false;
+  DateTime? _lastReroute;
 
   /// The route is drawn in the colour of the place's line (labs purple,
   /// food red ...), like a metro line.
@@ -96,7 +111,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   void dispose() {
     AppState.startPoint.removeListener(_onStartChanged);
-    _timer?.cancel(); // a running timer must be stopped when the screen closes
+    _gps?.cancel(); // stop GPS when the screen closes
     super.dispose();
   }
 
@@ -207,6 +222,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _guiding = true;
       _stepIndex = math.min(1, route.steps.length - 1); // step 0 is "you are here"
     });
+    _startTracking();
   }
 
   void _next(NavigationRoute route) {
@@ -249,7 +265,6 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _previous() {
-    _stopSimulation();
     if (_floorPrompt != null) {
       setState(() => _floorPrompt = null);
       return;
@@ -261,7 +276,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _endGuidance() {
-    _stopSimulation();
+    _stopTracking();
     setState(() {
       _floorPrompt = null;
       _guiding = false;
@@ -269,27 +284,326 @@ class _NavigationScreenState extends State<NavigationScreen> {
     });
   }
 
-  void _toggleSimulation(NavigationRoute route) {
-    if (_simulating) {
-      _stopSimulation();
+  // ---------------------------------------------------------- live GPS
+
+  static const _arriveRadius = 10.0; // metres: "you have reached the turn"
+
+  bool _stepIsInside(NavigationRoute route) =>
+      route.steps[_stepIndex].space == 'indoor';
+
+  Future<void> _startTracking() async {
+    final route = _route;
+    if (ApiService.useMock || route == null || !_guiding) return;
+    if (route.outdoorPolyline.length < 2 || _stepIsInside(route)) {
+      setState(() => _gpsState = _Gps.inside);
       return;
     }
-    setState(() => _simulating = true);
-    _timer = Timer.periodic(const Duration(milliseconds: 2800), (timer) {
-      _next(route);
-      if (_arrived) _stopSimulation();
+    setState(() {
+      _gpsState = _Gps.starting;
+      _gpsProblem = null;
+    });
+    final problem = await LocationService.permissionProblem();
+    if (!mounted || !_guiding) return;
+    if (problem != null) {
+      setState(() {
+        _gpsState = _Gps.blocked;
+        _gpsProblem = problem;
+      });
+      return;
+    }
+    _geometry = RouteGeometry(route.outdoorPolyline, route.steps);
+    await _gps?.cancel();
+    _gps = LocationService.follow().listen(
+      _onFix,
+      onError: (Object _) {
+        if (mounted) setState(() => _gpsState = _Gps.weak);
+      },
+    );
+  }
+
+  void _stopTracking({_Gps state = _Gps.off}) {
+    _gps?.cancel();
+    _gps = null;
+    _offRouteFixes = 0;
+    if (!mounted) return;
+    setState(() {
+      _livePos = null;
+      _liveStepLeft = null;
+      _gpsState = state;
     });
   }
 
-  void _stopSimulation() {
-    _timer?.cancel();
-    _timer = null;
-    if (mounted && _simulating) setState(() => _simulating = false);
+  /// After a step was changed by hand (Next, Back, a scanned sign): GPS on
+  /// for outside steps, off inside.
+  void _syncTracking() {
+    final route = _route;
+    if (route == null || !_guiding || _arrived || ApiService.useMock) return;
+    if (_stepIsInside(route)) {
+      if (_gps != null || _gpsState != _Gps.inside) _stopTracking(state: _Gps.inside);
+    } else if (_gps == null &&
+        _gpsState != _Gps.paused &&
+        _gpsState != _Gps.blocked &&
+        _gpsState != _Gps.starting) {
+      _startTracking();
+    }
+  }
+
+  void _onFix(Position p) {
+    final route = _route;
+    final geo = _geometry;
+    if (!mounted || route == null || geo == null || !_guiding || _arrived) return;
+    if (_stepIsInside(route)) {
+      _stopTracking(state: _Gps.inside);
+      return;
+    }
+    final acc = p.accuracy;
+    _gpsAccuracy = acc;
+    if (acc > 50) {
+      // Too rough to place you on a path: wait for a better fix.
+      setState(() => _gpsState = _Gps.weak);
+      return;
+    }
+
+    // Never look behind the current step (a path passing close to itself).
+    final from = math.max(0.0, (geo.stepAlong[_stepIndex] ?? 0) - 20);
+    final fix = geo.project(p.latitude, p.longitude, minAlong: from);
+
+    // Off the path for three fixes in a row: a new route from here.
+    if (fix.off > math.max(25.0, acc * 1.2)) {
+      _offRouteFixes++;
+      setState(() {
+        _gpsState = _Gps.live;
+        _livePos = GeoPoint(p.latitude, p.longitude);
+      });
+      if (_offRouteFixes >= 3) _reroute(p);
+      return;
+    }
+    _offRouteFixes = 0;
+
+    // Walked past the start of the next step(s)? Move on, like Google Maps.
+    final radius = math.max(6.0, math.min(acc, 15.0));
+    var i = _stepIndex;
+    while (i + 1 < route.steps.length) {
+      final next = route.steps[i + 1];
+      if (next.space == 'indoor') break; // going inside is confirmed by hand
+      final at = geo.stepAlong[i + 1];
+      if (at == null || fix.along < at - radius) break;
+      i++;
+    }
+    final hasNext = i + 1 < route.steps.length;
+    final nextAt = hasNext && route.steps[i + 1].space != 'indoor'
+        ? geo.stepAlong[i + 1]
+        : geo.length;
+    if (i != _stepIndex) HapticFeedback.mediumImpact();
+    setState(() {
+      _gpsState = _Gps.live;
+      _livePos = fix.point;
+      _liveStepLeft = nextAt == null ? null : math.max(0.0, nextAt - fix.along);
+      _stepIndex = i;
+    });
+
+    final atEnd = fix.along >= geo.length - radius;
+    if (atEnd && i >= route.steps.length - 1) {
+      // An outdoor destination: arrived.
+      HapticFeedback.heavyImpact();
+      _stopTracking();
+      setState(() => _arrived = true);
+    } else if (atEnd && hasNext && route.steps[i + 1].space == 'indoor') {
+      // At the building door: GPS is no use inside.
+      HapticFeedback.mediumImpact();
+      _stopTracking(state: _Gps.door);
+    }
+  }
+
+  Future<void> _reroute(Position p) async {
+    final last = _lastReroute;
+    if (_rerouting ||
+        (last != null && DateTime.now().difference(last) < const Duration(seconds: 15))) {
+      return;
+    }
+    setState(() {
+      _rerouting = true;
+      _lastReroute = DateTime.now();
+    });
+    try {
+      final route = await _api.getRoute(
+        start: _start.id,
+        destination: widget.destination.id,
+        stepFree: _stepFree,
+        startName: 'Your location',
+        startLat: p.latitude,
+        startLng: p.longitude,
+      );
+      if (!mounted || !_guiding) return;
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _route = route;
+        _stepIndex = math.min(1, route.steps.length - 1);
+        _floorPrompt = null;
+        _offRouteFixes = 0;
+        _livePos = null;
+        _liveStepLeft = null;
+      });
+      _geometry = route.outdoorPolyline.length > 1
+          ? RouteGeometry(route.outdoorPolyline, route.steps)
+          : null;
+      _toast('New route from where you are');
+      if (_geometry == null) _stopTracking(state: _Gps.inside);
+    } on ApiException catch (e) {
+      if (mounted) {
+        _toast(e.kind == ApiErrorKind.offCampus
+            ? 'You are off the campus paths. Head back towards the route.'
+            : 'Could not find a new route: ${e.message}');
+      }
+    } finally {
+      if (mounted) setState(() => _rerouting = false);
+    }
+  }
+
+  /// Inside: scan the QR code on a sign to jump to that point of the route
+  /// (or get a new route from there if it is not on this one).
+  Future<void> _scanSign() async {
+    final route = _route;
+    if (route == null) return;
+    final before = AppState.startPoint.value;
+    await openScanner(context, onManual: () {});
+    if (!mounted || !_guiding) return;
+    final here = AppState.startPoint.value;
+    if (identical(here, before)) return; // nothing scanned
+
+    var idx = -1;
+    for (var i = 1; i < route.steps.length; i++) {
+      if (route.steps[i].nodeId == here.id) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 1) {
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _floorPrompt = null;
+        _liveStepLeft = null;
+        _stepIndex = idx;
+      });
+      _syncTracking();
+      return;
+    }
+    try {
+      final fresh = await _api.getRoute(
+        start: here.id,
+        destination: widget.destination.id,
+        stepFree: _stepFree,
+        startName: here.name,
+      );
+      if (!mounted || !_guiding) return;
+      setState(() {
+        _route = fresh;
+        _start = here;
+        _floorPrompt = null;
+        _liveStepLeft = null;
+        _stepIndex = math.min(1, fresh.steps.length - 1);
+      });
+      _toast('New route from ${here.name}');
+      _syncTracking();
+    } on ApiException catch (e) {
+      if (mounted) _toast(e.message);
+    }
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(behavior: SnackBarBehavior.floating, content: Text(message)));
+  }
+
+  /// The GPS button and the line above the buttons: what guidance is doing
+  /// now, and what tapping the button does.
+  ({IconData icon, String status, String tip, Color color, VoidCallback onTap}) _gpsLook() {
+    final acc = _gpsAccuracy;
+    final pm = acc == null ? '' : ' · ±${acc.round()} m';
+    if (_rerouting) {
+      return (
+        icon: Icons.alt_route,
+        status: 'Finding a new route from where you are…',
+        tip: 'Rerouting',
+        color: AppColors.sportsInk,
+        onTap: () {},
+      );
+    }
+    void pause() => _stopTracking(state: _Gps.paused);
+    return switch (_gpsState) {
+      _Gps.live => (
+          icon: Icons.gps_fixed,
+          status: 'Following you by GPS$pm',
+          tip: 'Pause auto-follow',
+          color: AppColors.success,
+          onTap: pause,
+        ),
+      _Gps.starting => (
+          icon: Icons.gps_not_fixed,
+          status: 'Finding your position…',
+          tip: 'Pause auto-follow',
+          color: AppColors.sportsInk,
+          onTap: pause,
+        ),
+      _Gps.weak => (
+          icon: Icons.gps_not_fixed,
+          status: 'GPS is weak here$pm: tap Next as you go',
+          tip: 'Pause auto-follow',
+          color: AppColors.sportsInk,
+          onTap: pause,
+        ),
+      _Gps.paused || _Gps.off => (
+          icon: Icons.gps_off,
+          status: 'Auto-follow is off: tap Next as you go',
+          tip: 'Follow me by GPS',
+          color: AppColors.inkMuted,
+          onTap: () {
+            setState(() => _gpsState = _Gps.off);
+            _startTracking();
+          },
+        ),
+      _Gps.blocked => (
+          icon: Icons.location_disabled,
+          status: _gpsProblem?.problem == LocateProblem.serviceOff
+              ? 'Location is off: turn it on to be followed, or tap Next'
+              : 'No location access: tap Next as you go',
+          tip: 'Turn on location',
+          color: AppColors.danger,
+          onTap: () async {
+            final problem = _gpsProblem?.problem;
+            if (problem == LocateProblem.serviceOff) {
+              await LocationService.openLocationSettings();
+            } else if (problem == LocateProblem.deniedForever) {
+              await LocationService.openAppSettings();
+            } else {
+              setState(() => _gpsState = _Gps.off);
+              _startTracking();
+            }
+          },
+        ),
+      _Gps.door => (
+          icon: Icons.qr_code_scanner,
+          status: "You're at the entrance. Inside, tap Next as you go or scan a sign",
+          tip: 'Scan a sign',
+          color: AppColors.inkMuted,
+          onTap: _scanSign,
+        ),
+      _Gps.inside => (
+          icon: Icons.qr_code_scanner,
+          status: 'Inside: tap Next as you go, or scan a sign to jump there',
+          tip: 'Scan a sign',
+          color: AppColors.inkMuted,
+          onTap: _scanSign,
+        ),
+    };
   }
 
   double _remainingMeters(NavigationRoute route) {
-    var sum = 0.0;
-    for (var i = _stepIndex; i < route.steps.length; i++) {
+    // Live: what is left of this step, plus every step after it.
+    final live = _liveStepLeft;
+    var sum = live ?? 0.0;
+    for (var i = live == null ? _stepIndex : _stepIndex + 1; i < route.steps.length; i++) {
       sum += route.steps[i].distance ?? 0;
     }
     return sum;
@@ -670,6 +984,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     line: _line,
                     index: _stepIndex,
                     total: route.steps.length - 1,
+                    metresLeft: _liveStepLeft,
                   ),
                 ),
               ),
@@ -683,7 +998,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                           key: ValueKey('${_floorPrompt!.from}-${_floorPrompt!.to}'),
                           prompt: _floorPrompt!,
                           color: _line,
-                          onConfirm: () => _next(route),
+                          onConfirm: () {
+                            _next(route);
+                            _syncTracking();
+                          },
                           onBack: _previous,
                         ),
                 ),
@@ -706,15 +1024,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
     var key = 'outside';
 
     if (!inside) {
-      final here = (step.lat != null && step.lng != null)
-          ? GeoPoint(step.lat!, step.lng!)
-          : null;
+      // Live GPS position when following you, else the start of the step.
+      final here = _livePos ??
+          ((step.lat != null && step.lng != null) ? GeoPoint(step.lat!, step.lng!) : null);
       child = LiveCampusMap(
         route: route.outdoorPolyline,
         color: _line,
         person: here,
         follow: true,
         fill: true,
+        // GPS fixes arrive every second or two: glide quickly between them.
+        glide: Duration(milliseconds: _livePos != null ? 900 : 1400),
       );
     } else {
       RouteLeg? found;
@@ -790,6 +1110,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   /// Bottom panel: distance and time left, progress, and the buttons.
   Widget _guidancePanel(NavigationRoute route) {
     final text = Theme.of(context).textTheme;
+    final gps = _gpsLook();
     final remaining = _remainingMeters(route);
     final progress = _stepIndex / (route.steps.length - 1);
     final atEnd = _stepIndex >= route.steps.length - 1;
@@ -863,17 +1184,45 @@ class _NavigationScreenState extends State<NavigationScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          // What guidance is doing: following you by GPS, waiting for a fix,
+          // or (inside) waiting for you to tap Next / scan a sign.
+          if (!ApiService.useMock)
+            Semantics(
+              // Not a live region: the ± metres change with every GPS fix.
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(color: gps.color, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      gps.status,
+                      maxLines: 2,
+                      style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 12),
           Row(
             children: [
               if (_stepIndex > 1) ...[
                 OutlinedButton(
-                  onPressed: _previous,
+                  onPressed: () {
+                    _previous();
+                    _liveStepLeft = null;
+                    _syncTracking();
+                  },
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(56, 56),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
-                  child: const Icon(Icons.arrow_back),
+                  child: const Icon(Icons.arrow_back, semanticLabel: 'Previous step'),
                 ),
                 const SizedBox(width: 12),
               ],
@@ -882,21 +1231,25 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   style: FilledButton.styleFrom(
                     backgroundColor: _line,
                     foregroundColor: readableOnLine(_line),
+                    minimumSize: const Size(0, 56),
                   ),
                   onPressed: () {
-                    _stopSimulation();
+                    _liveStepLeft = null;
                     _next(route);
+                    _syncTracking();
                   },
                   child: Text(atEnd ? "I've arrived" : 'Next step'),
                 ),
               ),
-              const SizedBox(width: 12),
-              IconButton.filledTonal(
-                tooltip: _simulating ? 'Pause simulation' : 'Simulate walk',
-                style: IconButton.styleFrom(minimumSize: const Size(56, 56)),
-                onPressed: () => _toggleSimulation(route),
-                icon: Icon(_simulating ? Icons.pause : Icons.play_arrow),
-              ),
+              if (!ApiService.useMock) ...[
+                const SizedBox(width: 12),
+                IconButton.filledTonal(
+                  tooltip: gps.tip,
+                  style: IconButton.styleFrom(minimumSize: const Size(56, 56)),
+                  onPressed: gps.onTap,
+                  icon: Icon(gps.icon, color: gps.color),
+                ),
+              ],
             ],
           ),
         ],
@@ -965,16 +1318,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
           total: route.steps.length - 1,
         ),
       ),
-      const SizedBox(height: 8),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          onPressed: () => _toggleSimulation(route),
-          icon: Icon(_simulating ? Icons.pause_circle_outline : Icons.play_circle_outline),
-          label: Text(_simulating ? 'Pause simulation' : 'Simulate walk'),
-        ),
-      ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 24),
       Text('Whole route', style: text.titleMedium),
       const SizedBox(height: 16),
       RouteStrip(steps: route.steps, lineColor: _line, currentIndex: _stepIndex),
@@ -1012,10 +1356,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 Expanded(
                   child: FilledButton(
                     style: buttonStyle,
-                    onPressed: () {
-                      _stopSimulation();
-                      _next(route);
-                    },
+                    onPressed: () => _next(route),
                     child: Text(atEnd ? "I've arrived" : 'Next step'),
                   ),
                 ),
@@ -1044,13 +1385,17 @@ class _TurnBanner extends StatelessWidget {
     required this.line,
     required this.index,
     required this.total,
+    this.metresLeft,
   });
+
+  /// Live GPS: metres to the end of this step (counts down as you walk).
+  final double? metresLeft;
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final onColor = readableOnLine(line);
-    final metres = step.distance ?? 0;
+    final metres = metresLeft ?? step.distance ?? 0;
 
     // Each new instruction is read out by screen readers.
     return Semantics(
@@ -1439,4 +1784,16 @@ class _FromRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// What live guidance is doing with the GPS.
+enum _Gps {
+  off, // not started (or no outdoor part)
+  starting, // asking for permission / waiting for the first fix
+  live, // following you
+  weak, // fixes too rough to use
+  paused, // turned off by the user
+  blocked, // location off or not allowed
+  door, // reached the building entrance: inside is by hand
+  inside, // on an indoor step
 }
