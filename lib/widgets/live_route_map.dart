@@ -236,12 +236,25 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                     setState(() => _rotation = camera.rotation);
                   }
                 },
-                // Two-finger twist turns the map; the compass turns it back.
+                // Gestures tuned to feel like Google Maps:
+                // - a two-finger gesture first has to "decide" what it is: a
+                //   twist of 15 degrees makes it a rotation, a clear pinch makes
+                //   it a zoom (and then it will not turn the map by accident);
+                // - once rotating, you can still zoom and move with the same
+                //   two fingers;
+                // - fling, two-finger move, double-tap zoom, double-tap-and-drag
+                //   one-finger zoom and the mouse wheel all work.
                 interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.drag |
-                      InteractiveFlag.pinchZoom |
-                      InteractiveFlag.doubleTapZoom |
-                      InteractiveFlag.rotate,
+                  flags: InteractiveFlag.all,
+                  enableMultiFingerGestureRace: true,
+                  rotationThreshold: 15,
+                  rotationWinGestures: MultiFingerGesture.all,
+                  pinchZoomThreshold: 0.25,
+                  pinchZoomWinGestures:
+                      MultiFingerGesture.pinchZoom | MultiFingerGesture.pinchMove,
+                  pinchMoveThreshold: 30,
+                  pinchMoveWinGestures:
+                      MultiFingerGesture.pinchZoom | MultiFingerGesture.pinchMove,
                 ),
               ),
               children: [

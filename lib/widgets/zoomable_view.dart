@@ -51,13 +51,24 @@ class ZoomableView extends StatefulWidget {
 }
 
 /// Public so a parent with a GlobalKey can drive the zoom / compass buttons.
+///
+/// Gestures follow Google Maps:
+/// - one finger drags; let go while moving and the map glides to a stop;
+/// - two fingers pinch to zoom and move at the same time;
+/// - a two-finger twist only starts turning the map after about 15 degrees
+///   (35 if you are clearly zooming), and then follows your fingers from
+///   there without a jump; zoom keeps working while you turn;
+/// - double-tap zooms in, double-tap-and-drag zooms with one finger
+///   (drag down = in, up = out), two-finger tap zooms out;
+/// - the map does not snap back north; the compass does that.
 class ZoomableViewState extends State<ZoomableView>
     with SingleTickerProviderStateMixin {
-  // A twist smaller than this (radians, about 7 degrees) is ignored, so a
-  // plain pinch does not turn the map by accident.
-  static const _rotateDeadZone = 0.12;
-  // Let go within this of north and the map snaps straight (about 6 degrees).
-  static const _snapToNorth = 0.1;
+  static const _rotateThreshold = 15 * math.pi / 180;
+  static const _rotateThresholdWhileZooming = 35 * math.pi / 180;
+  static const _zoomDeadZone = 0.03; // ln(scale): ignore 3 % finger jitter
+  static const _zoomLock = 0.12; // ln(scale): past ~12 % it is "a zoom"
+  static const _flingMinSpeed = 350.0; // px/s
+  static const _quickZoomTime = Duration(milliseconds: 300);
 
   final _matrix = ValueNotifier<Matrix4>(Matrix4.identity());
   late final AnimationController _animation;
@@ -70,12 +81,36 @@ class ZoomableViewState extends State<ZoomableView>
   bool _moved = false; // the user (or a button / showPoint) has moved the view
   Offset? _doubleTapAt;
 
-  // The gesture in progress.
-  Matrix4? _startMatrix;
-  Offset _startFocal = Offset.zero;
-  double _startZoom = 1;
+  // ---- the two-finger gesture in progress ----
+  double _lastScale = 1;
+  double _lastRotation = 0;
+  Offset _lastFocal = Offset.zero;
+  int _lastPointers = 0;
+  int _maxPointers = 0; // fingers down at once since the last all-up (taps)
+  int _gestureFingers = 0; // most fingers in the current drag (fling)
+  double _rawLogScale = 0; // how much the fingers have pinched in total
+  double _rawRotation = 0; // and twisted, before anything was applied
+  bool _zoomOn = false;
+  bool _zoomLocked = false;
   bool _twisting = false;
-  double _twistOffset = 0;
+
+  // ---- raw pointers: quick zoom and two-finger tap ----
+  int _pointers = 0;
+  Offset? _downAt;
+  DateTime? _downTime;
+  DateTime? _lastTapUp;
+  Offset? _lastTapUpAt;
+  bool _quick = false; // double-tap-and-drag zoom in progress
+  bool _quickMoved = false;
+  Offset _quickAnchor = Offset.zero;
+  double _quickStartY = 0;
+  Matrix4 _quickStart = Matrix4.identity();
+  bool _skipDoubleTap = false;
+  // Raw pointer events arrive before the gesture callbacks, so the scale
+  // end of a drag-zoom comes after _quick is cleared; this remembers it.
+  bool _quickEnding = false;
+  DateTime? _twoDown;
+  double _twoTravel = 0;
 
   @override
   void initState() {
@@ -142,6 +177,15 @@ class ZoomableViewState extends State<ZoomableView>
         ..multiply(Matrix4.diagonal3Values(scale, scale, 1))
         ..multiply(Matrix4.translationValues(-content.dx, -content.dy, 0));
 
+  /// [m] changed on screen: scaled by [scale] and turned by [angle] around
+  /// [pivot], after moving by [shift].
+  static Matrix4 _around(Matrix4 m, Offset pivot, {double scale = 1, double angle = 0, Offset shift = Offset.zero}) =>
+      Matrix4.translationValues(pivot.dx, pivot.dy, 0)
+        ..multiply(Matrix4.rotationZ(angle))
+        ..multiply(Matrix4.diagonal3Values(scale, scale, 1))
+        ..multiply(Matrix4.translationValues(shift.dx - pivot.dx, shift.dy - pivot.dy, 0))
+        ..multiply(m);
+
   /// Which child point is under [screen] right now.
   Offset _toChild(Offset screen, [Matrix4? m]) =>
       MatrixUtils.transformPoint(Matrix4.inverted(m ?? _matrix.value), screen);
@@ -180,10 +224,15 @@ class ZoomableViewState extends State<ZoomableView>
     return _keepInside(_place(centre, _middle, _clampZoom(s), 0));
   }
 
-  void _animateTo(Matrix4 target) {
+  void _animateTo(
+    Matrix4 target, {
+    Duration duration = const Duration(milliseconds: 300),
+    Curve curve = Curves.easeOutCubic,
+  }) {
     _moved = true;
+    _animation.duration = duration;
     _tween = Matrix4Tween(begin: _matrix.value.clone(), end: target).animate(
-      CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic),
+      CurvedAnimation(parent: _animation, curve: curve),
     );
     _animation.forward(from: 0);
   }
@@ -208,7 +257,10 @@ class ZoomableViewState extends State<ZoomableView>
   /// Turn back to north-up, keeping the same spot in the middle.
   void resetRotation() {
     if (_size.isEmpty) return;
-    _animateTo(_keepInside(_place(_toChild(_middle), _middle, zoom, 0)));
+    _animateTo(
+      _keepInside(_place(_toChild(_middle), _middle, zoom, 0)),
+      duration: const Duration(milliseconds: 400),
+    );
   }
 
   /// True when showing the starting view.
@@ -224,53 +276,203 @@ class ZoomableViewState extends State<ZoomableView>
     _animateTo(_keepInside(_place(point, at, z, rotation)));
   }
 
-  // ---- gestures ----
+  // ---- drag / pinch / twist ----
+
+  /// Smallest equivalent angle, so a twist past 180 degrees does not jump.
+  static double _wrap(double a) {
+    while (a > math.pi) {
+      a -= 2 * math.pi;
+    }
+    while (a < -math.pi) {
+      a += 2 * math.pi;
+    }
+    return a;
+  }
 
   void _onScaleStart(ScaleStartDetails d) {
     _animation.stop();
     _moved = true;
-    _startMatrix = _matrix.value.clone();
-    _startFocal = d.localFocalPoint;
-    _startZoom = zoom;
+    _lastScale = 1;
+    _lastRotation = 0;
+    _lastFocal = d.localFocalPoint;
+    _lastPointers = d.pointerCount;
+    _gestureFingers = d.pointerCount;
+    _rawLogScale = 0;
+    _rawRotation = 0;
+    _zoomOn = false;
+    _zoomLocked = false;
     _twisting = false;
-    _twistOffset = 0;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final start = _startMatrix;
-    if (start == null) return;
-    final f = _clampZoom(_startZoom * d.scale) / _startZoom;
+    if (_quick || _quickEnding) return; // the one-finger zoom owns this gesture
 
-    var angle = 0.0;
-    if (widget.rotate && d.pointerCount >= 2) {
-      if (!_twisting && d.rotation.abs() > _rotateDeadZone) {
-        _twisting = true;
-        _twistOffset = d.rotation.sign * _rotateDeadZone; // no jump when it starts
-      }
-      if (_twisting) angle = d.rotation - _twistOffset;
+    // A finger was added or lifted: Flutter restarts scale and rotation from
+    // here, so take new reference values and move nothing this frame.
+    if (d.pointerCount != _lastPointers) {
+      _lastPointers = d.pointerCount;
+      _gestureFingers = math.max(_gestureFingers, d.pointerCount);
+      _lastScale = d.scale;
+      _lastRotation = d.rotation;
+      _lastFocal = d.localFocalPoint;
+      return;
     }
 
-    final m = Matrix4.translationValues(d.localFocalPoint.dx, d.localFocalPoint.dy, 0)
-      ..multiply(Matrix4.rotationZ(angle))
-      ..multiply(Matrix4.diagonal3Values(f, f, 1))
-      ..multiply(Matrix4.translationValues(-_startFocal.dx, -_startFocal.dy, 0))
-      ..multiply(start);
+    final ds = _lastScale > 0 ? d.scale / _lastScale : 1.0;
+    final dr = _wrap(d.rotation - _lastRotation);
+    final shift = d.localFocalPoint - _lastFocal;
+    _lastScale = d.scale;
+    _lastRotation = d.rotation;
+    _lastFocal = d.localFocalPoint;
+
+    var applyScale = 1.0;
+    var applyAngle = 0.0;
+    if (d.pointerCount >= 2) {
+      _rawLogScale += math.log(ds);
+      _rawRotation += dr;
+
+      // Decide what the fingers are doing. Changes start from the moment
+      // they are recognised, so nothing jumps when they kick in.
+      if (!_zoomOn && _rawLogScale.abs() > _zoomDeadZone) {
+        _zoomOn = true;
+      } else if (_zoomOn) {
+        applyScale = ds;
+      }
+      if (!_twisting && _rawLogScale.abs() > _zoomLock) _zoomLocked = true;
+      if (widget.rotate && !_twisting) {
+        final need = _zoomLocked ? _rotateThresholdWhileZooming : _rotateThreshold;
+        if (_rawRotation.abs() > need) _twisting = true;
+      } else if (_twisting) {
+        applyAngle = dr;
+      }
+    }
+
+    final current = _matrix.value;
+    final z = zoom;
+    final s = _clampZoom(z * applyScale) / z;
+    final m = _around(current, d.localFocalPoint, scale: s, angle: applyAngle, shift: shift);
     _matrix.value = _keepInside(m);
   }
 
   void _onScaleEnd(ScaleEndDetails d) {
-    _startMatrix = null;
-    final r = rotation;
-    if (widget.rotate && r != 0 && r.abs() < _snapToNorth) resetRotation();
+    if (_quick || _quickEnding) {
+      _quickEnding = false;
+      return;
+    }
+    // Let go while dragging with one finger: glide to a stop.
+    final v = d.velocity.pixelsPerSecond;
+    if (_gestureFingers == 1 && v.distance > _flingMinSpeed) {
+      final glide = v * 0.22; // about how far Google Maps coasts
+      _animateTo(
+        _keepInside(_around(_matrix.value, Offset.zero, shift: glide)),
+        duration: const Duration(milliseconds: 650),
+        curve: Curves.decelerate,
+      );
+    }
   }
 
   void _onDoubleTap() {
+    if (_skipDoubleTap) {
+      _skipDoubleTap = false;
+      return;
+    }
     final tap = _doubleTapAt;
     if (!atHome || tap == null) {
       reset();
       return;
     }
     _zoomAround(tap, 2.5); // keeps the tapped spot under the finger
+  }
+
+  // ---- raw pointers: double-tap-and-drag zoom, two-finger tap ----
+
+  void _onPointerDown(PointerDownEvent e) {
+    _pointers++;
+    final now = DateTime.now();
+    _maxPointers = math.max(_maxPointers, _pointers);
+    if (_pointers == 1) {
+      _skipDoubleTap = false;
+      _quickEnding = false;
+      _downAt = e.localPosition;
+      _downTime = now;
+      final t = _lastTapUp;
+      final at = _lastTapUpAt;
+      if (t != null &&
+          at != null &&
+          now.difference(t) < _quickZoomTime &&
+          (e.localPosition - at).distance < 40) {
+        // Second tap: if this finger now moves up or down, it zooms.
+        _quick = true;
+        _quickMoved = false;
+        _quickAnchor = e.localPosition;
+        _quickStartY = e.localPosition.dy;
+        _quickStart = _matrix.value.clone();
+        _animation.stop();
+      }
+    } else {
+      _quick = false;
+    }
+    if (_pointers == 2) {
+      _twoDown = now;
+      _twoTravel = 0;
+    }
+  }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (_pointers >= 2) _twoTravel += e.delta.distance;
+    if (!_quick || _pointers != 1) return;
+    final dy = e.localPosition.dy - _quickStartY;
+    if (!_quickMoved && dy.abs() > 8) _quickMoved = true;
+    if (!_quickMoved) return;
+    _moved = true;
+    // Drag down zooms in, up zooms out, like Google Maps.
+    final start = _scaleOf(_quickStart);
+    final s = _clampZoom(start * math.exp(dy / 160)) / start;
+    _matrix.value = _keepInside(_around(_quickStart, _quickAnchor, scale: s));
+  }
+
+  void _onPointerUp(PointerUpEvent e) {
+    final now = DateTime.now();
+    // Two fingers tapped together (no drag): zoom out one step.
+    final two = _twoDown;
+    if (_pointers == 2 &&
+        two != null &&
+        now.difference(two) < const Duration(milliseconds: 300) &&
+        _twoTravel < 24) {
+      zoomBy(0.5);
+    }
+    if (_pointers == 2) _twoDown = null;
+
+    _pointers = math.max(0, _pointers - 1);
+    if (_pointers > 0) return;
+
+    if (_quick) {
+      // A drag-zoom is not also a double-tap.
+      if (_quickMoved) _skipDoubleTap = true;
+      _quick = false;
+      _quickEnding = true;
+      _lastTapUp = null;
+      _maxPointers = 0;
+      return;
+    }
+    final down = _downTime;
+    final at = _downAt;
+    final wasTap = down != null &&
+        at != null &&
+        _maxPointers <= 1 &&
+        now.difference(down) < const Duration(milliseconds: 250) &&
+        (e.localPosition - at).distance < 20;
+    _lastTapUp = wasTap ? now : null;
+    _lastTapUpAt = wasTap ? e.localPosition : null;
+    _maxPointers = 0;
+  }
+
+  void _onPointerCancel(PointerCancelEvent e) {
+    _pointers = math.max(0, _pointers - 1);
+    if (_pointers == 0) {
+      _quick = false;
+      _maxPointers = 0;
+    }
   }
 
   /// Mouse wheel / trackpad scroll (emulator, desktop): zoom at the pointer.
@@ -293,6 +495,10 @@ class ZoomableViewState extends State<ZoomableView>
           });
         }
         return Listener(
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           onPointerSignal: _onPointerSignal,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
