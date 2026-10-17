@@ -37,6 +37,7 @@ dependencies:
   http: ^1.6.0
   shared_preferences: ^2.5.6
   mobile_scanner: ^7.4.2
+  geolocator: ^14.0.0 # "Use my location" in the start picker
   flutter_map: ^8.2.2
   latlong2: ^0.9.1
 

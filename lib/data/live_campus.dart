@@ -1,4 +1,5 @@
 import '../models/start_point.dart';
+import '../services/api_service.dart';
 
 /// Start points for the real campus (USE_MOCK=false).
 ///
@@ -27,6 +28,10 @@ class LiveCampus {
     if (!RegExp(r'^[a-z0-9_]+$').hasMatch(id)) return null;
 
     for (final p in startPoints) {
+      if (p.id == id) return p;
+    }
+    // Any place or named spot: use its real name from the campus map.
+    for (final p in ApiService.cachedCatalog?.starts ?? const <StartPoint>[]) {
       if (p.id == id) return p;
     }
     return StartPoint(id: id, name: _pretty(id), hint: 'From a QR code');

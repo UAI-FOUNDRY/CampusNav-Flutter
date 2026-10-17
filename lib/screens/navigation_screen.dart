@@ -107,6 +107,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
         destination: widget.destination.id,
         stepFree: _stepFree,
         startName: _start.name,
+        // "My location": start exactly where the phone is.
+        startLat: _start.live ? _start.lat : null,
+        startLng: _start.live ? _start.lng : null,
       );
       if (!mounted) return;
       AppState.addRecent(widget.destination.id);
@@ -159,6 +162,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
         destination: widget.destination.id,
         stepFree: on,
         startName: _start.name,
+        // "My location": start exactly where the phone is.
+        startLat: _start.live ? _start.lat : null,
+        startLng: _start.live ? _start.lng : null,
       );
       if (!mounted) return;
       setState(() {

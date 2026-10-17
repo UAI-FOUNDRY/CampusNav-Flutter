@@ -9,6 +9,7 @@ import '../data/mock_campus.dart';
 import '../models/destination.dart';
 import '../models/floor_info.dart';
 import '../models/route.dart';
+import '../models/start_point.dart';
 
 /// Every searchable place plus the floor pictures, from GET /api/graph.
 class CampusCatalog {
@@ -20,11 +21,16 @@ class CampusCatalog {
   /// on the phone from last time (routes still need the server).
   final bool offline;
 
+  /// Everywhere a route can start: every place plus named spots that are not
+  /// places (lifts, staircases, lobbies, side doors). Grouped by [StartPoint.group].
+  final List<StartPoint> starts;
+
   const CampusCatalog({
     required this.places,
     required this.floors,
     this.version,
     this.offline = false,
+    this.starts = const [],
   });
 }
 
@@ -85,6 +91,10 @@ class ApiService {
   static CampusCatalog? _catalog;
   static DateTime? _catalogAt;
 
+  /// The last loaded catalog, if any (no network). Used to give a scanned QR
+  /// code its proper name.
+  static CampusCatalog? get cachedCatalog => _catalog;
+
   /// Every place and floor, from GET /api/graph. Kept in memory for a few
   /// minutes (Home and Map share it); [refresh] fetches it again.
   /// Falls back to /api/rooms + /api/floors on a backend without /api/graph.
@@ -104,6 +114,7 @@ class ApiService {
       return _catalog = CampusCatalog(
         places: MockCampus.search(''),
         floors: FloorInfo.fallback,
+        starts: MockCampus.startPoints,
       );
     }
 
@@ -122,7 +133,7 @@ class ApiService {
       } on ApiException {
         // Keep the bundled list.
       }
-      result = CampusCatalog(places: places, floors: floors);
+      result = CampusCatalog(places: places, floors: floors, starts: _startsFrom(places, const {}));
     }
     // A saved offline copy is kept for one minute only, so the app tries the
     // server again soon.
@@ -214,7 +225,88 @@ class ApiService {
       floors: _floorsFrom(data['floors']),
       version: data['version']?.toString(),
       offline: offline,
+      starts: _startsFrom(places, nodes, data['rooms'] as List),
     );
+  }
+
+  static String _floorName(int f) => f == 0 ? 'Ground floor' : 'Floor $f';
+
+  /// Every place, then the named graph spots that are not places. Internal
+  /// corridor points ("x__y"), junctions and unnamed dots are left out.
+  static List<StartPoint> _startsFrom(
+    List<Destination> places,
+    Map<String, Map> nodes, [
+    List rooms = const [],
+  ]) {
+    final result = <StartPoint>[];
+    final usedNodes = <String>{};
+    final usedNames = <String>{};
+    for (final r in rooms) {
+      if (r is! Map) continue;
+      final ids = r['node_ids'] is List ? r['node_ids'] as List : [r['node_id']];
+      for (final id in ids) {
+        if (id != null) usedNodes.add(id.toString());
+      }
+    }
+
+    for (final d in places) {
+      usedNames.add(d.name.toLowerCase());
+      final where = d.isIndoor ? '${d.building} · ${_floorName(d.floor)}' : 'Outside';
+      final inside = d.withinName;
+      result.add(StartPoint(
+        id: d.id,
+        name: d.name,
+        hint: inside == null ? where : 'Inside the $inside · $where',
+        type: d.type,
+        group: where,
+        floor: d.floor,
+        indoor: d.isIndoor,
+        lat: d.lat,
+        lng: d.lng,
+      ));
+    }
+
+    for (final n in nodes.values) {
+      final id = n['id']?.toString() ?? '';
+      final name = (n['name'] ?? '').toString().trim();
+      if (id.isEmpty || name.isEmpty || id.contains('__')) continue;
+      if (usedNodes.contains(id) || usedNames.contains(name.toLowerCase())) continue;
+      final kind = (n['type'] ?? '').toString();
+      if (kind == 'junction' && !name.toLowerCase().contains('lobby') &&
+          !name.toLowerCase().contains('passage') && !name.toLowerCase().contains('steps')) {
+        continue;
+      }
+      if (name.toLowerCase().contains('junction')) continue;
+      final indoor = n['space'] == 'indoor';
+      final floor = int.tryParse('${n['floor'] ?? 0}') ?? 0;
+      final building = (n['building'] ?? '').toString().isNotEmpty
+          ? n['building'].toString()
+          : name.contains('Block A')
+              ? 'Block A'
+              : name.contains('Block B')
+                  ? 'Block B'
+                  : 'Main building';
+      final where = indoor ? '$building · ${_floorName(floor)}' : 'Outside';
+      final lower = name.toLowerCase();
+      result.add(StartPoint(
+        id: id,
+        name: name,
+        hint: where,
+        type: lower.contains('lift')
+            ? 'lift'
+            : lower.contains('stair')
+                ? 'stairs'
+                : (kind == 'exit' || lower.contains('door'))
+                    ? 'entrance'
+                    : 'place',
+        group: where,
+        floor: floor,
+        indoor: indoor,
+        lat: double.tryParse('${n['lat']}'),
+        lng: double.tryParse('${n['lng']}'),
+      ));
+    }
+    return result;
   }
 
   /// Floor list from {"floors": [...]} or a plain list. Never empty.
@@ -249,6 +341,8 @@ class ApiService {
     required String destination,
     bool stepFree = false,
     String? startName,
+    double? startLat, // GPS: the server snaps it to the nearest campus path
+    double? startLng,
   }) async {
     if (useMock) {
       await Future.delayed(const Duration(milliseconds: 800));
@@ -263,8 +357,10 @@ class ApiService {
       }
     }
 
+    final gps = startLat != null && startLng != null;
     final uri = Uri.parse('$baseUrl/api/route').replace(queryParameters: {
-      'from': start,
+      if (gps) 'from_lat': startLat.toString() else 'from': start,
+      if (gps) 'from_lng': startLng.toString(),
       'to': destination,
       if (stepFree) 'accessible': '1',
     });

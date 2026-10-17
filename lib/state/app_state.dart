@@ -19,6 +19,10 @@ class AppState {
   static final ValueNotifier<List<String>> recents =
       ValueNotifier<List<String>>(const []);
 
+  /// Start points picked recently (not GPS), most recent first.
+  static final ValueNotifier<List<StartPoint>> recentStarts =
+      ValueNotifier<List<StartPoint>>(const []);
+
   /// Recent trips as "startId>destinationId", most recent first.
   static final ValueNotifier<List<String>> trips =
       ValueNotifier<List<String>>(const []);
@@ -40,19 +44,47 @@ class AppState {
     stepFree.value = false;
     prefs.remove('stepFree');
 
+    recentStarts.value = (prefs.getStringList('recentStarts') ?? const <String>[])
+        .map(_decode)
+        .whereType<StartPoint>()
+        .toList();
+
     final startId = prefs.getString('startId');
     if (startId == null) {
       firstRun = true;
     } else {
+      // Any place or spot can be the start now, so its name is saved too.
+      final name = prefs.getString('startName');
+      final hint = prefs.getString('startHint') ?? '';
+      var restored = name == null ? null : StartPoint(id: startId, name: name, hint: hint);
       for (final point in Campus.startPoints) {
-        if (point.id == startId) startPoint.value = point;
+        if (point.id == startId && name == null) restored = point;
       }
+      if (restored != null) startPoint.value = restored;
     }
   }
 
+  static StartPoint? _decode(String line) {
+    final parts = line.split('\t');
+    if (parts.length < 3 || parts[0].isEmpty) return null;
+    return StartPoint(id: parts[0], name: parts[1], hint: parts[2], type: parts.length > 3 ? parts[3] : 'place');
+  }
+
+  static String _encode(StartPoint p) => [p.id, p.name, p.hint, p.type].join('\t');
+
   static void setStart(StartPoint point) {
     startPoint.value = point;
+    // A GPS start is saved as the spot it was near: the exact position is
+    // stale by the next time the app opens.
     _prefs?.setString('startId', point.id);
+    _prefs?.setString('startName', point.live ? point.hint.split(' · ').first : point.name);
+    _prefs?.setString('startHint', point.live ? 'Last GPS position' : point.hint);
+
+    if (!point.live) {
+      final list = [point, ...recentStarts.value.where((p) => p.id != point.id)].take(4).toList();
+      recentStarts.value = list;
+      _prefs?.setStringList('recentStarts', [for (final p in list) _encode(p)]);
+    }
   }
 
   static void setStepFree(bool value) {
