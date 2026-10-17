@@ -280,10 +280,12 @@ class ApiService {
   /// Turn the common ones into something a student can act on.
   String _errorMessage(http.Response response) {
     String? code;
+    String? message;
     try {
       final body = jsonDecode(response.body);
       if (body is Map && body['error'] is Map) {
         code = body['error']['code']?.toString();
+        message = body['error']['message']?.toString();
       }
     } catch (_) {
       // Not JSON: fall through to the generic message.
@@ -291,6 +293,9 @@ class ApiService {
     switch (code) {
       case 'no_route':
         return 'No walking route was found for that place.';
+      case 'no_step_free_route':
+        // e.g. "Innovation Lab (Incubation Launchpad) can only be reached by stairs ... Turn off step-free to see the route."
+        return message ?? 'There is no step-free route to that place. Turn off step-free to see the route.';
       case 'off_campus':
         return 'You seem to be too far from the campus paths.';
       case 'rate_limited':
