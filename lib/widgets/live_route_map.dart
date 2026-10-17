@@ -298,10 +298,14 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                       for (final d in pinned)
                         Marker(
                           point: LatLng(d.lat!, d.lng!),
-                          width: 36,
-                          height: 36,
+                          width: 44,
+                          height: 44,
                           alignment: Alignment.topCenter, // the pin's tip is the spot
-                          child: GestureDetector(
+                          child: Semantics(
+                            button: true,
+                            label: '${d.name}, ${lineForType(d.type).name}',
+                            excludeSemantics: true,
+                            child: GestureDetector(
                             onTap: widget.onPinTap == null
                                 ? null
                                 : () => widget.onPinTap!(d),
@@ -312,6 +316,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                               color: colorForType(d.type),
                               shadows: const [Shadow(color: Colors.white, blurRadius: 3)],
                             ),
+                          ),
                           ),
                         ),
                     ],

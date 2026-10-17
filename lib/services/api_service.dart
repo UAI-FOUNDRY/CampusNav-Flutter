@@ -18,10 +18,15 @@ class CampusCatalog {
   const CampusCatalog({required this.places, required this.floors, this.version});
 }
 
+/// What kind of problem it was, so the screen can show the right picture
+/// and offer the right fix (retry, pick another start, scan again ...).
+enum ApiErrorKind { offline, timeout, noRoute, offCampus, notFound, rateLimited, server }
+
 /// An error with a message that is safe to show to the user.
 class ApiException implements Exception {
   final String message;
-  const ApiException(this.message);
+  final ApiErrorKind kind;
+  const ApiException(this.message, [this.kind = ApiErrorKind.server]);
 
   @override
   String toString() => message;
@@ -175,7 +180,7 @@ class ApiService {
           stepFree: stepFree,
         );
       } on ArgumentError {
-        throw const ApiException('No walking route was found for that place.');
+        throw const ApiException('No walking route was found for that place.', ApiErrorKind.noRoute);
       }
     }
 
@@ -261,49 +266,74 @@ class ApiService {
     try {
       final response = await request.timeout(timeout ?? _timeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw ApiException(_errorMessage(response));
+        throw _errorFrom(response);
       }
       // Some endpoints (like /api/report) may answer with an empty body.
       return response.body.isEmpty ? null : jsonDecode(response.body);
     } on TimeoutException {
-      throw const ApiException('The server took too long to respond.');
+      throw const ApiException(
+          'The server took too long to answer. Check the Wi-Fi and try again.', ApiErrorKind.timeout);
     } on ApiException {
       rethrow;
     } on FormatException {
       throw const ApiException('The server sent data the app could not read.');
     } catch (_) {
-      throw const ApiException('Could not reach the server. Check your connection.');
+      throw const ApiException(
+          'Could not reach the server. Check that you are online (campus Wi-Fi or data).',
+          ApiErrorKind.offline);
     }
   }
 
   /// Flask errors look like {"error": {"code": "...", "message": "..."}}.
-  /// Turn the common ones into something a student can act on.
-  String _errorMessage(http.Response response) {
+  /// Turn them into something a student can act on. Newer backends write a
+  /// friendly sentence ("X can only be reached by stairs ..."); use it then.
+  ApiException _errorFrom(http.Response response) {
     String? code;
-    String? message;
+    String? serverText;
     try {
       final body = jsonDecode(response.body);
       if (body is Map && body['error'] is Map) {
         code = body['error']['code']?.toString();
-        message = body['error']['message']?.toString();
+        serverText = body['error']['message']?.toString();
       }
     } catch (_) {
       // Not JSON: fall through to the generic message.
     }
+    // A sentence written for people starts with a capital letter.
+    final friendly = serverText != null &&
+            serverText.length > 12 &&
+            serverText[0] == serverText[0].toUpperCase() &&
+            serverText[0] != serverText[0].toLowerCase()
+        ? serverText
+        : null;
+    final lower = '${code ?? ''} ${serverText ?? ''}'.toLowerCase();
+
+    if (code == 'no_route' || lower.contains('step_free') || lower.contains('stairs')) {
+      return ApiException(
+        friendly ?? 'There is no walking route to this place from where you are.',
+        ApiErrorKind.noRoute,
+      );
+    }
     switch (code) {
-      case 'no_route':
-        return 'No walking route was found for that place.';
-      case 'no_step_free_route':
-        // e.g. "Innovation Lab (Incubation Launchpad) can only be reached by stairs ... Turn off step-free to see the route."
-        return message ?? 'There is no step-free route to that place. Turn off step-free to see the route.';
       case 'off_campus':
-        return 'You seem to be too far from the campus paths.';
+        return const ApiException(
+          'You seem to be outside the campus paths. Pick a start point on campus.',
+          ApiErrorKind.offCampus,
+        );
       case 'rate_limited':
-        return 'Too many requests. Try again in a moment.';
+        return const ApiException(
+          'Too many requests at once. Wait a moment and try again.',
+          ApiErrorKind.rateLimited,
+        );
       case 'not_found':
-        return 'The app does not know that place yet. Try another start point.';
+        return ApiException(
+          friendly ?? 'The app does not know that place or start point. Try another start.',
+          ApiErrorKind.notFound,
+        );
       default:
-        return 'The server answered with an error (${response.statusCode}).';
+        return ApiException(
+          friendly ?? 'The server had a problem (${response.statusCode}). Try again in a moment.',
+        );
     }
   }
 }

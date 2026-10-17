@@ -20,7 +20,7 @@ class FloorSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 42,
+      height: 48,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: floors.length,
@@ -28,7 +28,13 @@ class FloorSelector extends StatelessWidget {
         itemBuilder: (context, i) {
           final floor = floors[i];
           final isSelected = floor == selected;
-          return Material(
+          final name = floor == 0 ? 'Ground floor' : 'Floor $floor';
+          return Semantics(
+            button: true,
+            selected: isSelected,
+            label: name,
+            excludeSemantics: true,
+            child: Material(
             color: isSelected ? color : Colors.white,
             shape: StadiumBorder(
               side: BorderSide(color: isSelected ? color : AppColors.mist),
@@ -50,6 +56,7 @@ class FloorSelector extends StatelessWidget {
                 ),
               ),
             ),
+          ),
           );
         },
       ),

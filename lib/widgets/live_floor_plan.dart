@@ -24,6 +24,10 @@ class FloorPin {
   final Color? color;
   final IconData? icon;
 
+  /// What a screen reader says, e.g. "AI Lab, lab, Block A". Defaults to
+  /// [label].
+  final String? semanticLabel;
+
   const FloorPin({
     required this.label,
     required this.x,
@@ -32,6 +36,7 @@ class FloorPin {
     this.selected = false,
     this.color,
     this.icon,
+    this.semanticLabel,
   });
 }
 
@@ -173,6 +178,8 @@ class LiveFloorPlan extends StatelessWidget {
             );
 
         final marker = PersonMarker(color: color, size: 26);
+        // "Reduce motion" in the phone's settings: no drawing / gliding.
+        final still = MediaQuery.of(context).disableAnimations;
         // Names once the plan is drawn at least 1.5 screen px per picture px.
         final showLabels = s * zoom >= 1.5;
 
@@ -182,6 +189,7 @@ class LiveFloorPlan extends StatelessWidget {
             Positioned.fill(
               child: Image.asset(
                 'assets/floorplans/$image',
+                excludeFromSemantics: true,
                 fit: BoxFit.fill,
                 filterQuality: FilterQuality.medium,
                 errorBuilder: (context, error, stack) => const Center(
@@ -205,13 +213,17 @@ class LiveFloorPlan extends StatelessWidget {
               ),
             if (me == null && points.length > 1)
               Positioned.fill(
-                child: TweenAnimationBuilder<double>(
+                child: Semantics(
+                  label: 'Route on this floor from ${route.first.name.isEmpty ? 'the start' : route.first.name} '
+                      'to ${route.last.name.isEmpty ? 'the destination' : route.last.name}',
+                  child: TweenAnimationBuilder<double>(
                   tween: Tween<double>(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 1200),
+                  duration: Duration(milliseconds: still ? 0 : 1200),
                   curve: Curves.easeInOut,
                   builder: (context, t, _) => CustomPaint(
                     painter: painter(points, color, stopFlags: stops, progress: t),
                   ),
+                ),
                 ),
               ),
             // The selected pin is drawn last, so it sits on top of the others.
@@ -252,15 +264,18 @@ class LiveFloorPlan extends StatelessWidget {
             // You are here: slides smoothly from one step to the next.
             if (me != null)
               AnimatedPositioned(
-                duration: const Duration(milliseconds: 1000),
+                duration: Duration(milliseconds: still ? 0 : 1000),
                 curve: Curves.easeInOut,
                 left: me.x * s - marker.outerSize / 2,
                 top: me.y * s - marker.outerSize / 2,
                 width: marker.outerSize,
                 height: marker.outerSize,
-                child: Transform.rotate(
-                  angle: -rotation,
-                  child: Transform.scale(scale: k, child: marker),
+                child: Semantics(
+                  label: 'You are here',
+                  child: Transform.rotate(
+                    angle: -rotation,
+                    child: Transform.scale(scale: k, child: marker),
+                  ),
                 ),
               ),
           ],
@@ -291,7 +306,7 @@ class LiveFloorPlan extends StatelessWidget {
   }
 
   List<Widget> _pinWidgets(FloorPin pin, double s, double k, bool showLabel) {
-    const hit = 30.0; // finger-sized tap area around the small dot
+    const hit = 44.0; // the minimum finger-sized tap area around the small dot
     final x = pin.x * s;
     final y = pin.y * s;
     final c = pin.color ?? color;
@@ -302,8 +317,15 @@ class LiveFloorPlan extends StatelessWidget {
         y,
         size: hit,
         k: k,
-        child: Tooltip(
+        child: Semantics(
+          button: true,
+          selected: pin.selected,
+          label: pin.semanticLabel ?? pin.label,
+          hint: pin.selected ? null : 'Shows this place',
+          excludeSemantics: true,
+          child: Tooltip(
           message: pin.label,
+          excludeFromSemantics: true,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: pin.onTap,
@@ -329,6 +351,7 @@ class LiveFloorPlan extends StatelessWidget {
               ),
             ),
           ),
+        ),
         ),
       ),
       // Names appear once zoomed in far enough for them to fit.
@@ -357,7 +380,7 @@ class LiveFloorPlan extends StatelessWidget {
                     child: Text(
                       pin.label,
                       style: const TextStyle(
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: AppColors.ink,
                         height: 1.2,

@@ -31,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, int> _minutes = const {}; // walking minutes from the user's location
   bool _loading = true;
   String? _error;
+  ApiErrorKind _errorKind = ApiErrorKind.server;
   String _query = '';
   String _category = 'All';
 
@@ -87,6 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       setState(() {
         _error = e.message;
+        _errorKind = e.kind;
         _loading = false;
       });
     }
@@ -282,7 +284,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
     if (_error != null) {
-      return ErrorView(message: _error!, onRetry: _retry);
+      return ErrorView(message: _error!, onRetry: _retry, kind: _errorKind);
     }
 
     final results = _all

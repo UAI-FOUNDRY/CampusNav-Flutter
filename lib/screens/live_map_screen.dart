@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../models/destination.dart';
 import '../models/floor_info.dart';
+import '../models/start_point.dart';
 import '../services/api_service.dart';
+import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
 import '../widgets/floor_plan_viewer.dart';
@@ -12,6 +14,7 @@ import '../widgets/live_route_map.dart';
 import '../widgets/place_card.dart';
 import '../widgets/segment_toggle.dart';
 import '../widgets/slide_route.dart';
+import '../widgets/start_location_sheet.dart';
 import '../widgets/state_views.dart';
 import 'navigation_screen.dart';
 
@@ -31,8 +34,8 @@ class LiveMapScreen extends StatefulWidget {
 
 class _LiveMapScreenState extends State<LiveMapScreen> {
   static const _peek = 92.0; // visible height of the closed sheet
-  static const _cardSpace = 168.0; // room the place card needs at the bottom
-  static const _chipsSpace = 52.0; // the line legend across the top of the map
+  static const _cardSpace = 220.0; // room the place card needs at the bottom
+  static const _chipsSpace = 56.0; // the line legend across the top of the map
 
   final _api = const ApiService();
   final _sheet = DraggableScrollableController();
@@ -42,6 +45,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   List<FloorInfo> _floors = FloorInfo.fallback;
   bool _loading = true;
   String? _error;
+  ApiErrorKind _errorKind = ApiErrorKind.server;
   int _mode = 1; // 0 = outdoors, 1 = indoors (most places are inside)
   int _floor = 0;
   Destination? _selected;
@@ -79,6 +83,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
       if (!mounted) return;
       setState(() {
         _error = e.message;
+        _errorKind = e.kind;
         _loading = false;
       });
     }
@@ -156,7 +161,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
     final present = <String>{for (final d in places) lineForType(d.type).name};
     final lines = [for (final l in placeLines) if (present.contains(l.name)) l];
     return SizedBox(
-      height: 40,
+      height: 44,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -230,7 +235,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
 
   Widget _body() {
     if (_loading) return const LoadingList();
-    if (_error != null) return ErrorView(message: _error!, onRetry: _retry);
+    if (_error != null) return ErrorView(message: _error!, onRetry: _retry, kind: _errorKind);
     return _mode == 0 ? _outdoors() : _indoors();
   }
 
@@ -245,11 +250,16 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
       ),
       child: d == null
           ? const SizedBox.shrink()
-          : PlaceCard(
+          : ValueListenableBuilder<StartPoint>(
               key: ValueKey(d.id),
-              destination: d,
-              onClose: _clearSelection,
-              onDirections: () => _directions(d),
+              valueListenable: AppState.startPoint,
+              builder: (context, start, _) => PlaceCard(
+                destination: d,
+                startName: start.name,
+                onChangeStart: () => showStartLocationSheet(context),
+                onClose: _clearSelection,
+                onDirections: () => _directions(d),
+              ),
             ),
     );
   }
@@ -304,6 +314,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
                         selected: d.id == selected?.id,
                         color: colorForType(d.type),
                         icon: iconForType(d.type),
+                        semanticLabel: '${d.name}, ${lineForType(d.type).name}, ${d.locationLine}',
                         onTap: () => _select(d),
                       ),
                 ],
@@ -534,7 +545,12 @@ class _LineChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fg = selected ? readableOnLine(color) : AppColors.ink;
-    return Material(
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: selected ? '$label, shown. Tap to stop filtering by it' : 'Show only $label',
+      excludeSemantics: true,
+      child: Material(
       color: selected ? color : Colors.white,
       elevation: 2,
       shadowColor: Colors.black26,
@@ -564,6 +580,7 @@ class _LineChip extends StatelessWidget {
           ),
         ),
       ),
+    ),
     );
   }
 }

@@ -12,11 +12,17 @@ class PlaceCard extends StatelessWidget {
   final VoidCallback onDirections;
   final VoidCallback onClose;
 
+  /// Where the directions will start from, changeable right here.
+  final String? startName;
+  final VoidCallback? onChangeStart;
+
   const PlaceCard({
     super.key,
     required this.destination,
     required this.onDirections,
     required this.onClose,
+    this.startName,
+    this.onChangeStart,
   });
 
   @override
@@ -78,12 +84,50 @@ class PlaceCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            if (startName != null) ...[
+              const SizedBox(height: 6),
+              Semantics(
+                button: onChangeStart != null,
+                label: 'Directions start from $startName. Change start point',
+                excludeSemantics: true,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: onChangeStart,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 4),
+                        const Icon(Icons.trip_origin, size: 16, color: AppColors.inkMuted),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'From $startName',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
+                          ),
+                        ),
+                        if (onChangeStart != null)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 12),
+                            child: Text(
+                              'Change',
+                              style: text.labelLarge?.copyWith(color: lineInk(line)),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: SizedBox(
                 width: double.infinity,
-                height: 48,
+                height: 52,
                 child: FilledButton.icon(
                   onPressed: onDirections,
                   icon: const Icon(Icons.directions_walk),
