@@ -40,6 +40,12 @@ class LiveCampusMap extends StatefulWidget {
   /// Keep the camera centred on the person (guidance).
   final bool follow;
 
+  /// While following: turn the map so the way you are walking points up,
+  /// with you low on the screen and the route ahead above you (like Google
+  /// Maps navigation). The direction comes from the route itself (where the
+  /// path goes next), which is steadier than the phone's compass.
+  final bool headingUp;
+
   /// Fill all the space it is given (square corners, round buttons at the
   /// bottom right) instead of being a rounded card of [height]. Used by the
   /// full-screen navigation view.
@@ -67,6 +73,7 @@ class LiveCampusMap extends StatefulWidget {
     this.height = 300,
     this.person,
     this.follow = false,
+    this.headingUp = false,
     this.fill = false,
     this.bottomInset = 0,
     this.topInset = 0,
@@ -87,6 +94,12 @@ class _LiveCampusMapState extends State<LiveCampusMap>
 
   bool _satellite = true;
   double _rotation = 0; // degrees, for the compass
+
+  // Following the person (guidance). A pan / pinch / twist by hand stops it
+  // until "Centre on me"; the compass switches to north-up.
+  bool _free = false;
+  bool _northUp = false;
+  double? _bearing; // degrees the camera is turned to (eased towards the route)
   bool _ready = false; // the map can only be moved after it has been built
 
   LatLng? _me; // where the person icon is drawn right now
@@ -137,33 +150,118 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   void _tick() {
     final p = _sample(_glide, Curves.easeInOut.transform(_anim.value));
     setState(() => _me = p);
-    if (widget.follow && _ready) {
+    _followCamera(p);
+  }
+
+  bool get _turning => widget.follow && widget.headingUp && !_northUp;
+
+  /// Keeps the camera on [p]: north-up and centred, or (heading-up) turned
+  /// to the way ahead with [p] in the lower part of the screen.
+  void _followCamera(LatLng p, {bool snap = false}) {
+    if (!widget.follow || !_ready || _free) return;
+    if (!_turning) {
       _controller.move(p, _controller.camera.zoom);
+      return;
+    }
+    final target = _headingAt(p);
+    if (target != null) {
+      final now = _bearing;
+      // Ease towards the new direction, the short way round, so corners turn
+      // the map smoothly instead of snapping.
+      _bearing = (now == null || snap) ? target : _wrap360(now + _wrap180(target - now) * 0.12);
+      _controller.rotate(-_bearing!);
+    }
+    final h = _controller.camera.nonRotatedSize.height;
+    _controller.move(p, _controller.camera.zoom, offset: Offset(0, h * 0.22));
+  }
+
+  static double _wrap180(double a) => ((a + 540) % 360) - 180;
+  static double _wrap360(double a) => (a % 360 + 360) % 360;
+
+  /// Compass direction (0 = north, clockwise) of the path from [p] towards a
+  /// point about 15 m further along it. Looking a little ahead makes the map
+  /// start turning just before a corner, not after it.
+  double? _headingAt(LatLng p) {
+    final line = _line;
+    if (line.length < 2) return null;
+    final at = _onLine(line, p);
+    var from = at.point;
+    var left = 15.0;
+    var target = line.last;
+    for (var i = at.seg + 1; i < line.length; i++) {
+      final step = _dist.distance(from, line[i]);
+      if (step >= left) {
+        final f = step == 0 ? 0.0 : left / step;
+        target = LatLng(
+          from.latitude + (line[i].latitude - from.latitude) * f,
+          from.longitude + (line[i].longitude - from.longitude) * f,
+        );
+        break;
+      }
+      left -= step;
+      from = line[i];
+    }
+    if (_dist.distance(at.point, target) < 1) {
+      // At the very end: keep the last direction of the path.
+      return _dist.bearing(line[line.length - 2], line.last);
+    }
+    return _dist.bearing(at.point, target);
+  }
+
+  /// "Centre on me": follow again (and turn heading-up again, if used).
+  void _recentre(LatLng me) {
+    setState(() {
+      _free = false;
+      _northUp = false;
+    });
+    if (!_ready) return;
+    if (widget.follow) {
+      _controller.move(me, _followZoom);
+      _followCamera(me, snap: true);
+    } else {
+      _controller.move(me, _followZoom);
     }
   }
 
-  int _nearest(List<LatLng> pts, LatLng to) {
+  /// Where [p] lies on the line: the piece it is on (from line[seg] to
+  /// line[seg + 1]) and the closest point. Measured along the pieces, not to
+  /// the nearest corner: the nearest corner can be just ahead of you, which
+  /// made the grey "walked" line overshoot and the red line cut the corner.
+  ({int seg, LatLng point}) _onLine(List<LatLng> line, LatLng p) {
+    if (line.length < 2) return (seg: 0, point: line.isEmpty ? p : line.first);
+    final k = math.cos(p.latitude * math.pi / 180); // squash longitude to metres-ish
+    final px = p.longitude * k;
+    final py = p.latitude;
     var best = 0;
-    var bestDistance = double.infinity;
-    for (var i = 0; i < pts.length; i++) {
-      final d = _dist.distance(pts[i], to);
-      if (d < bestDistance) {
-        bestDistance = d;
+    var bestD = double.infinity;
+    var bestPt = line.first;
+    for (var i = 0; i + 1 < line.length; i++) {
+      final ax = line[i].longitude * k, ay = line[i].latitude;
+      final dx = line[i + 1].longitude * k - ax, dy = line[i + 1].latitude - ay;
+      final len2 = dx * dx + dy * dy;
+      final t = len2 == 0 ? 0.0 : (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0).toDouble();
+      final cx = ax + t * dx, cy = ay + t * dy;
+      final d = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+      if (d < bestD) {
+        bestD = d;
         best = i;
+        bestPt = LatLng(cy, cx / k);
       }
     }
-    return best;
+    return (seg: best, point: bestPt);
   }
 
-  /// The route points between two spots, so the person walks along the path
-  /// and does not cut corners.
+  /// The route between two spots on it, so the person glides along the path
+  /// (round its corners) instead of cutting across.
   List<LatLng> _pathAlong(List<LatLng> line, LatLng from, LatLng to) {
     if (line.length < 2) return [from, to];
-    final i = _nearest(line, from);
-    final j = _nearest(line, to);
+    final i = _onLine(line, from).seg;
+    final j = _onLine(line, to).seg;
     if (i == j) return [from, to];
-    final middle = i < j ? line.sublist(i, j + 1) : line.sublist(j, i + 1).reversed.toList();
-    return [from, ...middle, to];
+    final corners = i < j
+        ? line.sublist(i + 1, j + 1) // forwards: the corners in between
+        : line.sublist(j + 1, i + 1).reversed.toList(); // backwards
+    return [from, ...corners, to];
   }
 
   /// The point [t] (0..1) of the way along a path, measured in metres.
@@ -204,9 +302,10 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     var ahead = line;
     final me = _me;
     if (widget.follow && me != null && line.length > 1) {
-      final i = _nearest(line, me);
-      walked = [...line.sublist(0, i + 1), me];
-      ahead = [me, ...line.sublist(i + 1)];
+      // Split exactly where you are on the line.
+      final k = _onLine(line, me).seg;
+      walked = [...line.sublist(0, k + 1), me];
+      ahead = [me, ...line.sublist(k + 1)];
     }
 
     // What the camera should fit: the route if there is one, else every pin.
@@ -235,8 +334,17 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                         maxZoom: 19,
                       )
                     : null,
-                onMapReady: () => _ready = true,
+                onMapReady: () {
+                  _ready = true;
+                  final me = _me;
+                  if (widget.follow && me != null) _followCamera(me, snap: true);
+                },
                 onPositionChanged: (camera, hasGesture) {
+                  // Moved by hand while following: stop following until
+                  // "Centre on me".
+                  if (hasGesture && widget.follow && !_free) {
+                    setState(() => _free = true);
+                  }
                   if ((camera.rotation - _rotation).abs() > 0.5) {
                     setState(() => _rotation = camera.rotation);
                   }
@@ -403,8 +511,15 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                   child: IconButton(
                     tooltip: 'Turn back north-up',
                     onPressed: () {
+                      // Heading-up: switch to north-up (Centre on me turns it back).
+                      setState(() {
+                        _rotation = 0;
+                        _northUp = true;
+                        _bearing = null;
+                      });
                       if (_ready) _controller.rotate(0);
-                      setState(() => _rotation = 0);
+                      final me = _me;
+                      if (me != null && widget.follow && !_free) _followCamera(me);
                     },
                     icon: Transform.rotate(
                       angle: _rotation * math.pi / 180,
@@ -430,10 +545,10 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                       const SizedBox(height: 10),
                       _roundButton(
                         icon: Icons.my_location,
-                        tooltip: 'Centre on me',
-                        onTap: () {
-                          if (_ready) _controller.move(me, _followZoom);
-                        },
+                        tooltip: widget.follow && widget.headingUp
+                            ? 'Follow me, direction up'
+                            : 'Centre on me',
+                        onTap: () => _recentre(me),
                       ),
                     ],
                   ],
@@ -486,9 +601,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                   child: IconButton(
                     tooltip: 'Centre on me',
                     icon: const Icon(Icons.my_location, size: 20, color: AppColors.ink),
-                    onPressed: () {
-                      if (_ready) _controller.move(me, _followZoom);
-                    },
+                    onPressed: () => _recentre(me),
                   ),
                 ),
               ),

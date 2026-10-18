@@ -1032,6 +1032,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
         color: _line,
         person: here,
         follow: true,
+        // The way you are walking points up, like Google Maps navigation.
+        headingUp: true,
         fill: true,
         // GPS fixes arrive every second or two: glide quickly between them.
         glide: Duration(milliseconds: _livePos != null ? 900 : 1400),
