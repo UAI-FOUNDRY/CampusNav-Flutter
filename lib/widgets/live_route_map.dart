@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -61,6 +62,11 @@ class LiveCampusMap extends StatefulWidget {
   /// How long the person icon takes to glide to a new [person] position.
   final Duration glide;
 
+  /// Live GPS: glide at a steady pace that lasts until the next fix is
+  /// expected (measured), instead of a slow-in / slow-out hop per fix, so
+  /// the icon and the map move continuously.
+  final bool smoothLive;
+
   /// Where to look when there is no route to fit (Universal AI University).
   static const campus = LatLng(18.9027, 73.3742);
 
@@ -78,6 +84,7 @@ class LiveCampusMap extends StatefulWidget {
     this.bottomInset = 0,
     this.topInset = 0,
     this.glide = const Duration(milliseconds: 1400),
+    this.smoothLive = false,
   });
 
   @override
@@ -85,7 +92,7 @@ class LiveCampusMap extends StatefulWidget {
 }
 
 class _LiveCampusMapState extends State<LiveCampusMap>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const _dist = Distance(roundResult: false); // keep sub-metre precision
   static const _followZoom = 18.5;
 
@@ -100,6 +107,15 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   bool _free = false;
   bool _northUp = false;
   double? _bearing; // degrees the camera is turned to (eased towards the route)
+
+  // The camera is driven every frame while following, so moving and turning
+  // are continuous and happen in one update.
+  Ticker? _frames;
+  Duration _lastFrame = Duration.zero;
+  LatLng? _shownCenter;
+  double? _shownBearing;
+  DateTime? _lastFixAt;
+  Curve _curve = Curves.easeInOut;
   bool _ready = false; // the map can only be moved after it has been built
 
   LatLng? _me; // where the person icon is drawn right now
@@ -122,6 +138,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     } else if (_line.isNotEmpty) {
       _me = _line.first;
     }
+    if (widget.follow) _frames = createTicker(_onFrame)..start();
   }
 
   @override
@@ -135,44 +152,94 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     final from = _me;
     final to = LatLng(now.lat, now.lng);
     _glide = from == null ? [to] : _pathAlong(_line, from, to);
-    _anim.duration = widget.glide;
+    if (widget.smoothLive) {
+      // Glide for about as long as fixes take to arrive (a bit longer, so the
+      // icon is still moving when the next one lands: no stop-and-go).
+      final now = DateTime.now();
+      final last = _lastFixAt;
+      _lastFixAt = now;
+      final gap = last == null ? widget.glide : now.difference(last);
+      final ms = (gap.inMilliseconds * 1.15).clamp(300, 2500).round();
+      _anim.duration = Duration(milliseconds: ms);
+      _curve = Curves.linear;
+    } else {
+      _anim.duration = widget.glide;
+      _curve = Curves.easeInOut;
+    }
     _anim.forward(from: 0);
   }
 
   @override
   void dispose() {
+    _frames?.dispose();
     _anim.dispose();
     _controller.dispose();
     super.dispose();
   }
 
-  /// Runs on every frame of the glide.
+  /// Runs on every frame of the glide: moves the person icon.
   void _tick() {
-    final p = _sample(_glide, Curves.easeInOut.transform(_anim.value));
+    final p = _sample(_glide, _curve.transform(_anim.value));
     setState(() => _me = p);
-    _followCamera(p);
   }
 
   bool get _turning => widget.follow && widget.headingUp && !_northUp;
 
-  /// Keeps the camera on [p]: north-up and centred, or (heading-up) turned
-  /// to the way ahead with [p] in the lower part of the screen.
-  void _followCamera(LatLng p, {bool snap = false}) {
+  void _onFrame(Duration elapsed) {
+    final dt = ((elapsed - _lastFrame).inMicroseconds / 1e6).clamp(0.0, 0.1).toDouble();
+    _lastFrame = elapsed;
+    _driveCamera(dt);
+  }
+
+  /// Keeps the camera on the person: north-up and centred, or (heading-up)
+  /// turned to the way ahead with the person in the lower part of the screen.
+  /// [dt] is the time since the last frame, so the turn eases at the same
+  /// speed on any phone.
+  void _driveCamera(double dt, {bool snap = false}) {
     if (!widget.follow || !_ready || _free) return;
+    final me = _me;
+    if (me == null) return;
+    final zoom = _controller.camera.zoom;
+
     if (!_turning) {
-      _controller.move(p, _controller.camera.zoom);
+      if (_shownCenter != me) {
+        _controller.move(me, zoom);
+        _shownCenter = me;
+      }
       return;
     }
-    final target = _headingAt(p);
+
+    final target = _headingAt(me);
+    var b = _bearing ?? target ?? 0.0;
     if (target != null) {
-      final now = _bearing;
-      // Ease towards the new direction, the short way round, so corners turn
-      // the map smoothly instead of snapping.
-      _bearing = (now == null || snap) ? target : _wrap360(now + _wrap180(target - now) * 0.12);
-      _controller.rotate(-_bearing!);
+      final diff = _wrap180(target - b);
+      if (snap) {
+        b = target;
+      } else if (diff.abs() > 1.0) {
+        // Ease the short way round, about half a second to settle; wobbles
+        // under 1 degree are ignored so the map does not tremble.
+        b = _wrap360(b + diff * (1 - math.exp(-dt / 0.45)));
+      }
     }
+    _bearing = b;
+
+    // Put the person 22 % of the screen below the middle: the middle of the
+    // map is that many metres ahead of them, in the direction of travel.
     final h = _controller.camera.nonRotatedSize.height;
-    _controller.move(p, _controller.camera.zoom, offset: Offset(0, h * 0.22));
+    final metresPerPixel =
+        156543.03392 * math.cos(me.latitude * math.pi / 180) / math.pow(2, zoom);
+    final center = _dist.offset(me, h * 0.22 * metresPerPixel, b);
+    if (center == _shownCenter && b == _shownBearing) return;
+    _controller.moveAndRotate(center, zoom, -b);
+    _shownCenter = center;
+    _shownBearing = b;
+  }
+
+  /// Jump the camera straight to where it should be (start, Centre on me).
+  void _followCamera({bool snap = true}) {
+    _shownCenter = null;
+    _shownBearing = null;
+    _driveCamera(0, snap: snap);
   }
 
   static double _wrap180(double a) => ((a + 540) % 360) - 180;
@@ -217,7 +284,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     if (!_ready) return;
     if (widget.follow) {
       _controller.move(me, _followZoom);
-      _followCamera(me, snap: true);
+      _followCamera();
     } else {
       _controller.move(me, _followZoom);
     }
@@ -337,7 +404,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                 onMapReady: () {
                   _ready = true;
                   final me = _me;
-                  if (widget.follow && me != null) _followCamera(me, snap: true);
+                  if (widget.follow && me != null) _followCamera();
                 },
                 onPositionChanged: (camera, hasGesture) {
                   // Moved by hand while following: stop following until
@@ -519,7 +586,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                       });
                       if (_ready) _controller.rotate(0);
                       final me = _me;
-                      if (me != null && widget.follow && !_free) _followCamera(me);
+                      if (me != null && widget.follow && !_free) _followCamera();
                     },
                     icon: Transform.rotate(
                       angle: _rotation * math.pi / 180,

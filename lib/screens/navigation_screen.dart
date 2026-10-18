@@ -92,6 +92,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   double? _liveStepLeft; // metres to the end of the current step
   double? _gpsAccuracy;
   int _offRouteFixes = 0;
+  double? _lastAlong; // metres along the path at the last fix
   bool _rerouting = false;
   DateTime? _lastReroute;
 
@@ -325,6 +326,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _gps?.cancel();
     _gps = null;
     _offRouteFixes = 0;
+    _lastAlong = null;
     if (!mounted) return;
     setState(() {
       _livePos = null;
@@ -380,6 +382,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
     _offRouteFixes = 0;
 
+    // GPS wobbles: a fix a few metres *behind* the last one is noise, not you
+    // walking back. Keep the icon where it was instead of stepping back.
+    var along = fix.along;
+    var point = fix.point;
+    final last = _lastAlong;
+    final prev = _livePos;
+    if (last != null && prev != null && along < last && last - along < 8) {
+      along = last;
+      point = prev;
+    }
+    _lastAlong = along;
+
     // Walked past the start of the next step(s)? Move on, like Google Maps.
     final radius = math.max(6.0, math.min(acc, 15.0));
     var i = _stepIndex;
@@ -387,7 +401,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final next = route.steps[i + 1];
       if (next.space == 'indoor') break; // going inside is confirmed by hand
       final at = geo.stepAlong[i + 1];
-      if (at == null || fix.along < at - radius) break;
+      if (at == null || along < at - radius) break;
       i++;
     }
     final hasNext = i + 1 < route.steps.length;
@@ -397,12 +411,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
     if (i != _stepIndex) HapticFeedback.mediumImpact();
     setState(() {
       _gpsState = _Gps.live;
-      _livePos = fix.point;
-      _liveStepLeft = nextAt == null ? null : math.max(0.0, nextAt - fix.along);
+      _livePos = point;
+      _liveStepLeft = nextAt == null ? null : math.max(0.0, nextAt - along);
       _stepIndex = i;
     });
 
-    final atEnd = fix.along >= geo.length - radius;
+    final atEnd = along >= geo.length - radius;
     if (atEnd && i >= route.steps.length - 1) {
       // An outdoor destination: arrived.
       HapticFeedback.heavyImpact();
@@ -441,6 +455,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         _stepIndex = math.min(1, route.steps.length - 1);
         _floorPrompt = null;
         _offRouteFixes = 0;
+        _lastAlong = null;
         _livePos = null;
         _liveStepLeft = null;
       });
@@ -1036,7 +1051,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
         headingUp: true,
         fill: true,
         // GPS fixes arrive every second or two: glide quickly between them.
-        glide: Duration(milliseconds: _livePos != null ? 900 : 1400),
+        glide: Duration(milliseconds: _livePos != null ? 1000 : 1400),
+        smoothLive: _livePos != null,
       );
     } else {
       RouteLeg? found;
