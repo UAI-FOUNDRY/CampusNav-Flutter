@@ -136,10 +136,10 @@ The app talks to the Flask API in the backend repo; `docs/api.md` there is the r
                     ┌──────────────────────┐
                     │    Flask Backend     │
                     │                      │
-                    │  REST API             │
+                    │  REST API            │
                     │  Search              │
-                    │  Routing              │
-                    │  Positioning          │
+                    │  Routing             │
+                    │  Positioning         │
                     └──────────┬───────────┘
                                │
                     ┌──────────┴───────────┐
@@ -153,5 +153,5 @@ The app talks to the Flask API in the backend repo; `docs/api.md` there is the r
                                ▼
                     ┌──────────────────────┐
                     │    Flutter UI        │
-                    │  Map + Directions     │
+                    │  Map + Directions    │
                     └──────────────────────┘
