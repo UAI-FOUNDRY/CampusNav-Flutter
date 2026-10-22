@@ -380,7 +380,7 @@ class _NavigationScreenState extends State<NavigationScreen>
     final last = _lastReroute;
     if (g == null) return;
     if (_rerouting ||
-        (last != null && DateTime.now().difference(last) < const Duration(seconds: 15))) {
+        (last != null && DateTime.now().difference(last) < GuideTuning.rerouteCooldown)) {
       if (!_rerouting) g.rerouteHandled();
       return;
     }
@@ -1000,6 +1000,7 @@ class _NavigationScreenState extends State<NavigationScreen>
             : _FloorPrompt(from: wait.from, to: wait.to, via: wait.via);
     final mismatch = g?.floorMismatch;
     final turn = g?.turnToRoute;
+    final inside = g?.pose.value?.indoor ?? step.space == 'indoor';
 
     return Column(
       children: [
@@ -1028,55 +1029,61 @@ class _NavigationScreenState extends State<NavigationScreen>
                   ),
                 ),
               ),
+              // The instruction card, and under it (never on top of it,
+              // however tall it gets) the "wrong floor" banner.
               Positioned(
                 top: top + 8,
                 left: 12,
                 right: 12,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 320),
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, -0.15),
-                        end: Offset.zero,
-                      ).animate(animation),
-                      child: child,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 320),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, -0.15),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: _TurnBanner(
+                        key: ValueKey(_stepIndex),
+                        step: step,
+                        line: _line,
+                        index: _stepIndex,
+                        total: route.steps.length - 1,
+                        metresLeft: g?.metresToNext,
+                      ),
                     ),
-                  ),
-                  child: _TurnBanner(
-                    key: ValueKey(_stepIndex),
-                    step: step,
-                    line: _line,
-                    index: _stepIndex,
-                    total: route.steps.length - 1,
-                    metresLeft: g?.metresToNext,
-                  ),
+                    // The barometer says you went up/down somewhere else.
+                    if (mismatch != null && prompt == null) ...[
+                      const SizedBox(height: 8),
+                      _WrongFloorBanner(
+                        floor: mismatch,
+                        routeFloor: g?.pose.value?.floor ?? (step.floor ?? 0),
+                        onReroute: () {
+                          final pose = g?.pose.value;
+                          if (pose == null) return;
+                          _rerouteFrom(pose.geo.lat, pose.geo.lng, floor: mismatch);
+                        },
+                        onDismiss: () => g?.dismissMismatch(),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              // The barometer says you went up/down somewhere else.
-              if (mismatch != null && prompt == null)
-                Positioned(
-                  top: top + 128,
-                  left: 12,
-                  right: 12,
-                  child: _WrongFloorBanner(
-                    floor: mismatch,
-                    routeFloor: g?.pose.value?.floor ?? (step.floor ?? 0),
-                    onReroute: () {
-                      final pose = g?.pose.value;
-                      if (pose == null) return;
-                      _rerouteFrom(pose.geo.lat, pose.geo.lng, floor: mismatch);
-                    },
-                    onDismiss: () => g?.dismissMismatch(),
-                  ),
-                ),
               // Standing still facing away from the route: which way to turn.
+              // Inside it sits above the floor chip (bottom left).
               if (turn != null && turn.abs() >= 60 && prompt == null)
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: 18,
+                  bottom: inside ? 66 : 18,
                   child: Center(child: _TurnHint(angle: turn)),
                 ),
               // The stairs / lift moment covers the map until confirmed.
@@ -1157,6 +1164,8 @@ class _NavigationScreenState extends State<NavigationScreen>
                 person: g == null && px != null && py != null ? MapPoint(px, py) : null,
                 live: g?.pose,
                 focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
+                // Keep "you" below the instruction card at the top.
+                topInset: MediaQuery.of(context).padding.top + 140,
               ),
             ),
             Positioned(

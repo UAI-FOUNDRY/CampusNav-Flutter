@@ -97,7 +97,7 @@ class Destination {
       'x': first['x'],
       'y': first['y'],
       'indoor': entry.every((n) => n['space'] == 'indoor'),
-      if (within != null) 'within_name': within,
+      'within_name': ?within,
     });
   }
 

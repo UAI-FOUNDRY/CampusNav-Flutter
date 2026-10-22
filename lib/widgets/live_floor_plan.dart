@@ -75,7 +75,7 @@ Rect? routeFocus(List<IndoorPoint> points, double imageWidth, double imageHeight
 /// markers are shrunk by it so zooming in shows more of the plan instead of
 /// fatter lines.
 ///
-/// The image must be bundled as assets/floorplans/<image> (see pubspec.yaml).
+/// The image must be bundled as `assets/floorplans/<image>` (see pubspec.yaml).
 class LiveFloorPlan extends StatelessWidget {
   final String image; // file name from the backend, e.g. "ground.png"
   final double imageWidth;

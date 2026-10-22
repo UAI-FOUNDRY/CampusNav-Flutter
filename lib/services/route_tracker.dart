@@ -415,7 +415,7 @@ class RouteGeometry {
     return n;
   }
 
-  /// "out" or "f<floor>" at [along]: the lines GPS fixes may be matched to.
+  /// `out` or `f<floor>` at [along]: the lines GPS fixes may be matched to.
   String keyAt(double along) {
     final p = placeAt(along);
     return p.indoor ? 'f${p.floor}' : 'out';

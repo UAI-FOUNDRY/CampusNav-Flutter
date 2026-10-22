@@ -10,130 +10,24 @@ import '../models/route.dart';
 import '../models/start_point.dart';
 import 'api_service.dart';
 import 'floor_barometer.dart';
+import 'guide_tuning.dart';
 import 'location_service.dart';
 import 'motion_sensors.dart';
 import 'position_filter.dart';
 import 'route_tracker.dart';
 import 'wifi_fingerprints.dart';
 
-/// What is moving you along the route right now (for the status line).
-enum GuideMode {
-  starting, // waiting for the first sensor data / GPS fix
-  gps, // outside: GPS (with your steps between fixes)
-  steps, // inside, or GPS too rough: your steps and turns move you
-  manual, // no step sensor: tap Next as you go
-  floorChange, // at the stairs / lift: waiting for the new floor
-  paused, // auto-follow turned off
-  simulated, // "Simulate walk" (testing at a desk)
-}
+export 'guide_tuning.dart';
 
-/// The stairs / lift ride you have reached: shown as the floor card until
-/// the new floor is confirmed (by the barometer, a scanned sign, or you).
-class FloorWait {
-  final int from;
-  final int to;
-  final String via; // "stairs" or "lift"
-
-  /// Barometer: how much of the climb is done (0..1), null before it starts
-  /// or without a barometer.
-  final double? progress;
-
-  /// The phone has a barometer, so the card will close by itself.
-  final bool automatic;
-
-  const FloorWait({
-    required this.from,
-    required this.to,
-    required this.via,
-    this.progress,
-    this.automatic = false,
-  });
-
-  bool get up => to > from;
-}
-
-/// Where to draw you, every frame.
-class LivePose {
-  /// Metres along the route (line metres).
-  final double along;
-  final GeoPoint geo;
-  final bool indoor;
-  final int floor;
-
-  /// Floor-plan pixels (indoor).
-  final MapPoint? plan;
-
-  /// Direction of the route here (compass degrees) and on the floor plan
-  /// (radians clockwise from up).
-  final double bearing;
-  final double? planAngle;
-
-  /// Add to a compass direction (radians) to get it on the floor plan.
-  final double? planNorth;
-
-  /// Which way the phone points (compass degrees), null when unknown.
-  final double? heading;
-
-  /// How sure the position is (metres), for the halo.
-  final double accuracy;
-
-  /// GPS says you are off the path: [geo] is the raw GPS position.
-  final bool offRoute;
-
-  const LivePose({
-    required this.along,
-    required this.geo,
-    required this.indoor,
-    required this.floor,
-    required this.bearing,
-    required this.accuracy,
-    this.plan,
-    this.planAngle,
-    this.planNorth,
-    this.heading,
-    this.offRoute = false,
-  });
-
-  /// Which way the phone points on the floor plan (radians clockwise from
-  /// the top of the picture), or null.
-  double? get planFacing {
-    final h = heading, n = planNorth;
-    if (h == null || n == null) return null;
-    return h * math.pi / 180 + n;
-  }
-}
-
-/// Air pressure over the last minute and a half, to see climbs.
-class PressureTrack {
-  double? p;
-  final ListQueue<(double, double)> _hist = ListQueue<(double, double)>(); // (t, hPa)
-
-  void add(double smoothed, double t) {
-    p = smoothed;
-    _hist.addLast((t, smoothed));
-    while (_hist.isNotEmpty && t - _hist.first.$1 > 90) {
-      _hist.removeFirst();
-    }
-  }
-
-  /// The newest reading that is at least [secs] old.
-  double? ago(double t, double secs) {
-    double? best;
-    for (final (tq, q) in _hist) {
-      if (t - tq >= secs) {
-        best = q;
-      } else {
-        break;
-      }
-    }
-    return best;
-  }
-
-  void clear() {
-    _hist.clear();
-    p = null;
-  }
-}
+// The guide is one class in four files (one library: they share its
+// private members):
+//  * live_guide.dart          the class: state, outputs, control, the frame
+//  * live_guide_types.dart    what it hands the screen (LivePose, FloorWait ...)
+//  * live_guide_position.dart GPS fixes, steps and turns -> where you are
+//  * live_guide_floors.dart   stairs, lifts, the barometer -> which floor
+part 'live_guide_types.dart';
+part 'live_guide_position.dart';
+part 'live_guide_floors.dart';
 
 /// Live guidance along one route, like Google Maps, inside and out.
 ///
@@ -170,16 +64,8 @@ class LiveGuide extends ChangeNotifier {
   /// set from it.
   final bool startFloorKnown;
 
-  // Tuned in simulation on the real campus routes (see docs in the README).
-  static const double defaultStepLength = 0.72;
-  static const double _climbDp = 0.06; // hPa change within 5 s: climbing
-  static const double _calmDp = 0.025; // hPa change within 3 s: not any more
-  static const double _calmHold = 1.0; // s of calm that ends a climb
-  static const double _settle = 2.0; // s without turning before deciding
-  static const double _minTurn = 45.0;
-  static const double _angleTol = 60.0;
-  static const double _rideNear = 40.0; // m: a climb this close is the route's ride
-  static const double _walkSpeed = 1.3; // m/s, simulation
+  // Every tuning value is in GuideTuning (guide_tuning.dart).
+  static const double defaultStepLength = GuideTuning.defaultStepLength;
 
   NavigationRoute _route;
   RouteGeometry _geo;
@@ -236,7 +122,7 @@ class LiveGuide extends ChangeNotifier {
   // The walking rhythm: on the level before the stairs, and on the stairs.
   double? _levelGap;
   final List<double> _rideGaps = [];
-  double _stairSteps = 24; // steps per floor (learned)
+  double _stairSteps = GuideTuning.defaultStairStepsPerFloor; // steps per floor (learned)
   // After the stairs card closed at a full count: steps still climbing.
   double? _absorbLevel;
   double? _absorbStair;
@@ -421,9 +307,15 @@ class LiveGuide extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final saved = prefs.getDouble('guide.stepLength');
-      if (saved != null && saved >= 0.45 && saved <= 1.0) _stepLength = saved;
+      if (saved != null && saved >= GuideTuning.minStepLength && saved <= GuideTuning.maxStepLength) {
+        _stepLength = saved;
+      }
       final stairs = prefs.getDouble('guide.stairSteps');
-      if (stairs != null && stairs >= 14 && stairs <= 40) _stairSteps = stairs;
+      if (stairs != null &&
+          stairs >= GuideTuning.minStairStepsPerFloor &&
+          stairs <= GuideTuning.maxStairStepsPerFloor) {
+        _stairSteps = stairs;
+      }
     } catch (_) {}
     await _baro.load();
     if (_disposed || !_running) return;
@@ -474,6 +366,38 @@ class LiveGuide extends ChangeNotifier {
     super.dispose();
   }
 
+  // ------------------------------------------------------------- tests
+
+  /// Tests: run without the phone's sensors and GPS; feed them with the
+  /// debug calls below and set the time with [SensorClock.debugTime].
+  /// Air pressure goes in through [FloorBarometer.add].
+  @visibleForTesting
+  void debugStart() {
+    if (_running || _disposed) return;
+    _running = true;
+    _startedAt = SensorClock.now();
+    _lastFrame = null;
+    // Only the listener: the real barometer stream is not started here.
+    _baroOn = true;
+    _baro.addListener(_onPressure);
+  }
+
+  /// Tests: one walking step at [t] ([gap] s after the previous one).
+  @visibleForTesting
+  void debugStep(double t, double? gap) => _onStep(t, gap);
+
+  /// Tests: one GPS fix.
+  @visibleForTesting
+  void debugFix(Position p) => _onFix(p);
+
+  /// Tests: one turn of the body ([angle] degrees, clockwise +).
+  @visibleForTesting
+  void debugTurn(double angle, double t0, double t1) => _onSegment(angle, t0, t1);
+
+  /// Tests: the 10-a-second housekeeping (arrival, standing still ...).
+  @visibleForTesting
+  void debugTick() => _tick();
+
   /// Location was off / not allowed: try again (after the user fixed it).
   Future<void> retryGps() async {
     if (!_running || _gpsSub != null) return;
@@ -511,7 +435,7 @@ class LiveGuide extends ChangeNotifier {
     if (_simulating == on) return;
     _simulating = on;
     _simWaitSince = null;
-    _f.v = on ? _walkSpeed : 0;
+    _f.v = on ? GuideTuning.simulateSpeed : 0;
     _changed();
   }
 
@@ -558,7 +482,7 @@ class LiveGuide extends ChangeNotifier {
     // No barometer: your tap says how many steps a floor of these stairs is.
     if (!hasBarometer && r.via == 'stairs' && _rideFor == r && r.floors != 0 && _rideSteps >= 8) {
       final perFloor = _rideSteps / r.floors.abs();
-      _stairSteps = (0.6 * _stairSteps + 0.4 * perFloor).clamp(14.0, 40.0).toDouble();
+      _stairSteps = (0.6 * _stairSteps + 0.4 * perFloor).clamp(GuideTuning.minStairStepsPerFloor, GuideTuning.maxStairStepsPerFloor).toDouble();
       _saveStairSteps();
     }
     _confirm(r, by: 'you');
@@ -636,7 +560,7 @@ class LiveGuide extends ChangeNotifier {
     if (!_climbing) return false;
     if (_pendingExtra) return true;
     final r = _holdRide;
-    return r != null && r.from - _f.s <= _rideNear;
+    return r != null && r.from - _f.s <= GuideTuning.rideNearMetres;
   }
 
   void _clamp() {
@@ -647,37 +571,12 @@ class LiveGuide extends ChangeNotifier {
       if (_f.v > 0) _f.v = 0;
     }
     if (_f.s < 0) _f.s = 0;
-    if (hold == null && _geo.length - _f.s <= 3.0) _arrived = true;
+    if (hold == null && _geo.length - _f.s <= GuideTuning.arriveWithin) _arrived = true;
   }
 
   void _predict(double t) {
     _f.predict(t);
     _clamp();
-  }
-
-  /// Steps in [from, to) seconds.
-  int _stepsBetween(double from, double to) {
-    var n = 0;
-    for (final s in _stepTimes) {
-      if (s >= from && s < to) n++;
-    }
-    return n;
-  }
-
-  int _stepsSince(double from) {
-    var n = 0;
-    for (final s in _stepTimes) {
-      if (s >= from) n++;
-    }
-    return n;
-  }
-
-  /// Steps a second over the last 4 s, or null.
-  double? _cadence(double t) {
-    final recent = [for (final s in _stepTimes) if (t - s <= 4.0) s];
-    if (recent.length < 5) return null;
-    final span = recent.last - recent.first;
-    return span > 0 ? (recent.length - 1) / span : null;
   }
 
   void _onStep(double t, double? gap) {
@@ -715,345 +614,6 @@ class LiveGuide extends ChangeNotifier {
 
   double get _metresPerFloor => _baro.hPaPerFloor / FloorBarometer.hPaPerMetre;
 
-  /// The counts below belong to the ride you are at now.
-  FloorRide? _trackRide() {
-    final r = _holdRide;
-    if (r == null) return null;
-    if (_rideFor != r) {
-      _rideFor = r;
-      _rideSteps = 0;
-      _rideYaw0 = _motion.turns.yaw;
-      _rideGaps.clear();
-      _levelGap = _recentLevelGap();
-      _liftRight = 0;
-      _liftPushes = 0;
-      _liftStartAt = null;
-      _liftEnteredAt = null;
-      _liftPushInside = false;
-      _liftWalk = 0;
-      _liftLastStepT = -1e9;
-      _liftStills = 0;
-      _liftStillCounted = false;
-      _liftSince = SensorClock.now();
-      _liftStillSince = _liftSince;
-    }
-    return r;
-  }
-
-  /// Your usual time between steps on the level (median of the last ten,
-  /// before the stairs), or null if you have not walked enough.
-  double? _recentLevelGap() {
-    final times = _stepTimes.toList();
-    final gaps = <double>[
-      for (var i = 1; i < times.length; i++)
-        if (times[i] - times[i - 1] >= 0.3 && times[i] - times[i - 1] <= 1.2) times[i] - times[i - 1],
-    ];
-    if (gaps.length < 6) return null;
-    final last = gaps.sublist(math.max(0, gaps.length - 10))..sort();
-    return last[last.length ~/ 2];
-  }
-
-  // ------------------------------------------------- stairs (no barometer)
-  //
-  // The card closes when the progress bar is full: [_stairSteps] steps a
-  // floor (24 to begin with, then learned for your stairs), or earlier on
-  // dog-leg stairs once you turned round once a floor (gyroscope), or when
-  // your walking rhythm says the stairs are over.
-  //
-  // The rhythm: climbing stairs is clearly slower than walking on the level
-  // (about 10-30 %). Stairs shorter than the count: your steps are back to
-  // the level rhythm before the bar is full, so the card closes then. Stairs
-  // longer: the card closes at the full bar, and the steps that still have
-  // the stairs' rhythm do not move the arrow along the new floor. Either way
-  // the steps this staircase has per floor are learned, without a tap.
-  //
-  // Simulated with 16-32 step staircases, mid landings and an uneven gait:
-  // going up, the per-floor count is learned within a few climbs.
-
-  /// (level gap, stairs gap) when climbing these stairs has its own rhythm
-  /// (at least 12 % slower or faster than walking), else null.
-  (double, double)? _rhythm({int skipLast = 0}) {
-    final level = _levelGap;
-    final n = _rideGaps.length - skipLast;
-    if (level == null || n < 8) return null;
-    final body = _rideGaps.sublist(1, n)..sort();
-    final stairs = body[body.length ~/ 2];
-    if ((stairs / level - 1).abs() < 0.12) return null;
-    return (level, stairs);
-  }
-
-  static bool _levelLike(double gap, double level, double stairs) =>
-      (gap - level).abs() < (gap - stairs).abs() && (gap / level - 1).abs() <= 0.12;
-
-  /// Steps at the end of [_rideGaps] that already have the level rhythm.
-  int _trailingLevel(double level, double stairs) {
-    var k = 0;
-    for (var i = _rideGaps.length - 1; i >= 0 && k < 8; i--) {
-      if (!_levelLike(_rideGaps[i], level, stairs)) break;
-      k++;
-    }
-    return k;
-  }
-
-  void _learnStairs(FloorRide r, int steps) {
-    if (r.floors == 0 || steps < 8) return;
-    final perFloor = steps / r.floors.abs();
-    _stairSteps = (0.5 * _stairSteps + 0.5 * perFloor).clamp(14.0, 40.0).toDouble();
-    _saveStairSteps();
-  }
-
-  /// The top of the stairs: close the card, and learn from the rhythm.
-  void _stairsDone(FloorRide r, double expected) {
-    final rh = _rhythm(skipLast: 3);
-    var walked = 0.0;
-    if (rh != null) {
-      final (level, stairs) = rh;
-      final k = _trailingLevel(level, stairs);
-      if (k >= 2) {
-        // Already walking on the level for k steps: shorter stairs.
-        _learnStairs(r, _rideSteps - k);
-        walked = _stepLength * k;
-      } else {
-        // Still climbing at the full count: the steps that keep the stairs'
-        // rhythm do not move the arrow; then the count is learned.
-        _absorbLevel = level;
-        _absorbStair = stairs;
-        _absorbBase = _rideSteps;
-        _absorbFloors = r.floors.abs();
-        _absorbLeft = (0.6 * expected).ceil();
-        _absorbSteps = 0;
-        _absorbLevelRun = 0;
-      }
-    }
-    _confirm(r, walked: walked, by: 'steps');
-  }
-
-  /// After the card closed at a full count: a step with the stairs' rhythm
-  /// (true: it does not move the arrow) or the level one.
-  bool _absorbStep(double? gap) {
-    final level = _absorbLevel, stairs = _absorbStair;
-    if (level == null || stairs == null || gap == null) return false;
-    if ((gap - stairs).abs() < (gap - level).abs()) {
-      _absorbSteps++;
-      _absorbLevelRun = 0;
-      if (--_absorbLeft <= 0) _absorbLevel = _absorbStair = null;
-      return true;
-    }
-    if (++_absorbLevelRun >= 2) {
-      final floors = _absorbFloors;
-      _absorbLevel = _absorbStair = null;
-      if (floors > 0) {
-        final perFloor = (_absorbBase + _absorbSteps) / floors;
-        _stairSteps = (0.5 * _stairSteps + 0.5 * perFloor).clamp(14.0, 40.0).toDouble();
-        _saveStairSteps();
-      }
-    }
-    return false;
-  }
-
-  /// A step while the card is up (stairs or lift).
-  void _stairStep([double? gap]) {
-    final r = _trackRide();
-    if (r == null) return;
-    _rideSteps++;
-    if (gap != null) _rideGaps.add(gap);
-    if (hasBarometer || r.floors == 0) return;
-    if (r.via == 'lift') {
-      _liftStep();
-      return;
-    }
-    if (r.via != 'stairs') return;
-    final floors = r.floors.abs();
-    final expected = _stairSteps * floors;
-    // 1) Back to the level rhythm before the count is full: shorter stairs.
-    final rh = _rhythm(skipLast: 5);
-    if (rh != null && _rideSteps >= 0.6 * expected + 5) {
-      final (level, stairs) = rh;
-      final last = _rideGaps.sublist(_rideGaps.length - 5);
-      if (last.where((g) => _levelLike(g, level, stairs)).length >= 4) {
-        _learnStairs(r, _rideSteps - 5);
-        _confirm(r, walked: _stepLength * 5, by: 'steps');
-        return;
-      }
-    }
-    // 2) Dog-leg / spiral stairs: a full turn round a floor (gyroscope;
-    //    a compass is bent by the steel of a stairwell).
-    final turned = (_motion.turns.yaw - _rideYaw0).abs();
-    if (_motion.hasGyroscope && _rideSteps >= 0.8 * expected && turned >= 330.0 * floors) {
-      _stairsDone(r, expected);
-      return;
-    }
-    // 3) The count: the bar is full, the card closes.
-    if (_rideSteps >= expected) _stairsDone(r, expected);
-  }
-
-  // --------------------------------------------------- lift (no barometer)
-  //
-  // The lift is felt by its start push and its stop push (see LiftMeter).
-  // The card closes:
-  //  - when the lift stops after taking you the route's way (one floor: any
-  //    such ride; more: once the floors add up);
-  //  - when only the stop was felt (the start was missed): a push the other
-  //    way while you stand in the lift;
-  //  - when only the start was felt: once the lift must have arrived at the
-  //    speed measured, while you still stand in it;
-  //  - otherwise as you walk out: six steps after a push felt in the lift,
-  //    eight after any push, six after you stood still twice (waiting, then
-  //    riding), twelve after standing once for 20 s or more.
-  // "In the lift" means after the walk that took you in.
-  //
-  // Simulated on whole trips (walk to the lift, wait 3-40 s with a fidgeting
-  // hand, step in, ride 1-3 floors, walk out): the card closes as the lift
-  // stops in about 90 % of trips (100 % with a calm hand), about 1 % before
-  // the ride, the rest as you walk out; it never stays up.
-
-  void _liftStep() {
-    final t = _stepTimes.isEmpty ? SensorClock.now() : _stepTimes.last;
-    _liftWalk = t - _liftLastStepT <= 1.5 ? _liftWalk + 1 : 1;
-    _liftLastStepT = t;
-    if (_liftWalk >= 2) {
-      _liftStillCounted = false;
-      _liftEnteredAt = t; // the latest walk ends here, for now
-    }
-    final r = _holdRide;
-    if (r == null) return;
-    final felt = _liftRight > 0 || _liftPushInside;
-    if ((felt && _liftWalk >= 6) ||
-        (_liftPushes > 0 && _liftWalk >= 8) ||
-        (_liftStills >= 2 && _liftWalk >= 6) ||
-        (_liftStills >= 1 && t - _liftSince >= 20 && _liftWalk >= 12)) {
-      _confirm(r, walked: _stepLength * _liftWalk, by: 'lift');
-    }
-  }
-
-  /// Every tick at the lift: standing still (5 s counts once per stand), and
-  /// "it must have arrived" after a start the route's way.
-  void _liftTick(double t) {
-    final r = _holdRide;
-    if (hasBarometer || r == null || r.via != 'lift' || !_waiting || r.floors == 0) return;
-    _trackRide();
-    final walking = _motion.walkingAt(t);
-    if (walking) {
-      _liftStillSince = null;
-    } else {
-      final since = _liftStillSince ??= t;
-      if (t - since >= 5.0 && !_liftStillCounted) {
-        _liftStills++;
-        _liftStillCounted = true;
-      }
-    }
-    final start = _liftStartAt, entered = _liftEnteredAt;
-    final lift = _motion.lift;
-    if (start != null && entered != null && start > entered && !walking &&
-        lift.riding && lift.direction * r.floors > 0) {
-      final due = start + _metresPerFloor * r.floors.abs() / math.max(_liftStartSpeed, 0.3) + 3.0;
-      if (t >= due) _confirm(r, by: 'lift');
-    }
-  }
-
-  /// The lift was felt starting ([direction] +1 up, -1 down).
-  void _onLiftStart(int direction, double startedAt, double speed) {
-    if (!_running || _paused || _simulating || hasBarometer) return;
-    final hold = _holdRide;
-    if (hold == null || hold.via != 'lift' || hold.from - _f.s > 15) return;
-    final r = _trackRide();
-    if (r == null || r.floors == 0) return;
-    _liftPushes++;
-    final entered = _liftEnteredAt;
-    final inside = entered != null && startedAt > entered;
-    _liftPushInside = inside;
-    if (direction * r.floors > 0) {
-      _liftStartAt = startedAt;
-      _liftStartSpeed = speed;
-    } else if (_liftStartAt == null && inside && _waiting) {
-      // The route's way was never felt starting, but here is a push the
-      // other way while you stand in the lift: the lift stopping.
-      final still = _liftStillSince;
-      if (still != null && SensorClock.now() - still >= 3.0) {
-        _confirm(r, by: 'lift');
-        return;
-      }
-    }
-    _changed();
-  }
-
-  /// A whole lift ride felt by the accelerometer ([metres] up, + or -).
-  void _onLift(double metres) {
-    if (!_running || _paused || _simulating || hasBarometer || metres.abs() < 1.0) return;
-    final hold = _holdRide;
-    if (hold == null || hold.via != 'lift' || hold.from - _f.s > 15) return;
-    final r = _trackRide();
-    if (r == null || r.floors == 0) return;
-    if (metres * r.floors > 0) {
-      _liftRight += metres.abs();
-      final floors = _liftRight / _metresPerFloor;
-      final want = r.floors.abs();
-      if (want == 1 || floors >= want - 0.65) {
-        // The lift has stopped on the route's floor: learn how high a floor is.
-        final perFloor = _liftRight / want;
-        if (perFloor >= 2.7 && perFloor <= 6.0) {
-          _baro.learnFloorHeight(perFloor * FloorBarometer.hPaPerMetre);
-        }
-        _confirm(r, by: 'lift');
-        return;
-      }
-    }
-    _changed();
-  }
-
-  Future<void> _saveStairSteps() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble('guide.stairSteps', _stairSteps);
-    } catch (_) {}
-  }
-
-  /// Without a barometer, on Android: every 40 s inside, the Wi-Fi around is
-  /// compared with the learned fingerprints. Two scans in a row on another
-  /// floor than the route: "You seem to be on floor N".
-  Future<void> _wifiFloorCheck(double t) async {
-    final wifi = WifiFingerprints.instance;
-    if (_wifiBusy || hasBarometer || !wifi.supported || t - _wifiAt < 40 || _waiting) return;
-    final place = _geo.placeAt(_f.s);
-    if (!place.indoor) return;
-    _wifiBusy = true;
-    _wifiAt = t;
-    try {
-      await wifi.load();
-      if (wifi.spotCount == 0) return;
-      final scan = await wifi.scan();
-      if (scan == null || !_running) return;
-      final spots = <String, StartPoint>{
-        for (final s in ApiService.cachedCatalog?.starts ?? const <StartPoint>[]) s.id: s,
-      };
-      final floor = wifi.guess(scan, spots).floor;
-      if (floor == null) return;
-      final routeFloor = _geo.placeAt(_f.s).floor;
-      if (floor == routeFloor) {
-        _wifiAgree = 0;
-        _wifiFloor = null;
-        return;
-      }
-      _wifiAgree = _wifiFloor == floor ? _wifiAgree + 1 : 1;
-      _wifiFloor = floor;
-      if (_wifiAgree >= 2 && _mismatch != floor) {
-        _floorOffset = floor - routeFloor;
-        _mismatch = floor;
-        _changed();
-      }
-    } finally {
-      _wifiBusy = false;
-    }
-  }
-
-  /// The compass says you face away from the route (inside, phone in hand).
-  bool _walkingAway(double t) {
-    final h = _motion.heading, at = _motion.headingAt;
-    if (h == null || at == null || t - at > 1.0 || !_motion.inHand) return false;
-    if (!_geo.placeAt(_f.s).indoor) return false; // outside GPS sorts it out
-    return RouteGeometry.wrap180(h - _geo.bearingAt(_f.s)).abs() > 135;
-  }
-
   void _tick() {
     if (!_running) return;
     final t = SensorClock.now();
@@ -1066,7 +626,9 @@ class LiveGuide extends ChangeNotifier {
       final left = _geo.length - _f.s;
       final near = left <= math.max(4.0, 1.5 * _f.sigma);
       // Stopped close to the end (after walking a little): arrived.
-      if (stopped && near && !_waiting && left <= 8.0 && _f.s >= 1.0) _arrived = true;
+      if (stopped && near && !_waiting && left <= GuideTuning.arriveWhenStoppedWithin && _f.s >= 1.0) {
+        _arrived = true;
+      }
       // No steps lately and GPS does not say you are moving: standing still.
       if ((last == null || t - last > 1.4) && t - _gpsSpeedAt > 2.5) {
         _f.updateVelocity(0, 0.15 * 0.15);
@@ -1095,101 +657,17 @@ class LiveGuide extends ChangeNotifier {
       }
       return;
     }
-    _f.v = _walkSpeed;
+    _f.v = GuideTuning.simulateSpeed;
   }
 
-  /// Walking in or out of the building's ground floor: the door is on the
-  /// ground floor, a perfect moment for the barometer's reference.
-  void _doorReference() {
-    final place = _geo.placeAt(_f.s);
-    final was = _wasIndoor;
-    _wasIndoor = place.indoor;
-    if (was == null || was == place.indoor || _climbing || _simulating) return;
-    if (place.floor == 0 && _f.sigma < 8) _baro.setFloor(0, basis: 'door');
-  }
-
-  void _onFix(Position p) {
-    final t = SensorClock.now();
-    _lastFix = p;
-    if (!_running || _paused || _simulating) return;
-    _predict(t);
-    final acc = p.accuracy;
-    final place = _geo.placeAt(_f.s);
-    _outsideReference(p, place.indoor, t);
-    final maxAcc = place.indoor ? 8.0 : 25.0;
-    if (acc > maxAcc || _waiting) return;
-
-    final fix = _geo.project(
-      p.latitude,
-      p.longitude,
-      minAlong: _f.s - 30,
-      maxAlong: _f.s + math.max(60.0, 2 * acc),
-      keys: {place.indoor ? 'f${place.floor}' : 'out'},
-      hint: _f.s,
-    );
-    if (fix == null) return;
-    if (fix.off > math.max(25.0, acc * 1.2)) {
-      _offFixes++;
-      if (!place.indoor) {
-        _offPos = GeoPoint(p.latitude, p.longitude);
-        if (_offFixes >= 3 && _rerouteFrom == null) {
-          _rerouteFrom = p;
-          _changed();
-        }
-      }
-      return;
-    }
-    _offFixes = 0;
-    _offPos = null;
-
-    final sigma = math.max(2.5, acc / 1.5) * 1.3;
-    final r = sigma * sigma;
-    final y = fix.along - _f.s;
-    final gate = (place.indoor ? 2.0 : 3.0) * _f.innovationSigma(r);
-    if (y.abs() > gate) {
-      final sign = y > 0 ? 1 : -1;
-      _rejects = sign == _rejectSign ? _rejects + 1 : 1;
-      _rejectSign = sign;
-      if (_rejects >= 5 && acc <= 15 && !place.indoor) {
-        // GPS keeps disagreeing the same way: we were wrong, trust it again.
-        _f.reset(fix.along, sigma: sigma);
-        _rejects = 0;
-        _clamp();
-      }
-      return;
-    }
-    _rejects = 0;
-    _f.updatePosition(fix.along, r);
-    _gpsGoodAt = t;
-
-    // GPS speed along the path (Doppler: accurate outside while moving).
-    if (!place.indoor && acc <= 20) {
-      if (p.speed >= 0.5 && p.heading >= 0) {
-        final rb = _geo.bearingAt(_f.s);
-        final along = p.speed * math.cos(RouteGeometry.wrap180(p.heading - rb) * math.pi / 180);
-        _f.updateVelocity(along, 0.25 * 0.25);
-        if (p.speed >= 0.8) _gpsSpeedAt = t;
-        // Step length = speed / cadence while walking steadily with a sharp fix.
-        final cad = _cadence(t);
-        if (acc <= 12 && p.speed > 0.8 && cad != null && cad >= 1.2 && cad <= 2.6) {
-          final est = p.speed / cad;
-          if (est >= 0.4 && est <= 1.1) _stepLength = 0.85 * _stepLength + 0.15 * est;
-        }
-      } else if (p.speed >= 0 && p.speed < 0.3) {
-        _f.updateVelocity(0, 0.3 * 0.3);
-      }
-    }
-    _clamp();
-  }
-
-  /// Outside with a sharp fix right next to the building: ground floor.
-  void _outsideReference(Position p, bool indoor, double t) {
-    if (indoor || p.accuracy > 10 || _climbing || t - _lastOutsideRef < 60) return;
-    final near = _geo.project(p.latitude, p.longitude, keys: const {'f0'});
-    if (near == null || near.off > 25) return;
-    _lastOutsideRef = t;
-    _baro.setFloor(0, basis: 'outside');
-  }
+  // Sensor callbacks. They stay in the class and hand over to the parts:
+  // a listener has to be the very same object when it is removed again
+  // (an extension method torn off twice is not).
+  void _onFix(Position p) => _gpsFix(p);
+  void _onPressure(double p, double t) => _pressureChanged(p, t);
+  void _onLift(double metres) => _liftRide(metres);
+  void _onLiftStart(int direction, double startedAt, double speed) =>
+      _liftStarted(direction, startedAt, speed);
 
   void _onSegment(double angle, double t0, double t1) {
     if (_waiting || _climbNearRide) {
@@ -1197,233 +675,6 @@ class LiveGuide extends ChangeNotifier {
       return;
     }
     _segs.add((angle, t0, t1));
-  }
-
-  /// Once the turning has settled, decide what the turn segments were and,
-  /// if they were the route's corners, correct the position.
-  void _checkTurns(double t) {
-    if (_segs.isEmpty || _motion.turns.turning || t - _segs.last.$3 < _settle) return;
-    final segs = List<(double, double, double)>.of(_segs);
-    _segs.clear();
-    final lastStep = _lastStepT;
-    final recentlyWalking = lastStep != null && t - lastStep < 4.0;
-    if (_waiting || _climbNearRide || !recentlyWalking) return;
-    _predict(t);
-
-    // Where we thought we were at time ts: now minus the steps since.
-    (double, double) posAt(double ts) {
-      final back = _stepLength * _stepsSince(ts);
-      return (_f.s - back, back);
-    }
-
-    final hold = _holdRide;
-    List<RouteCorner> candidates(double angle, double at, double window) => [
-          for (final c in _geo.corners)
-            if ((c.turn > 0) == (angle > 0) &&
-                (c.turn.abs() - angle.abs()).abs() <= _angleTol &&
-                (hold == null || c.along <= hold.from + 0.5) &&
-                (c.along - at).abs() <= window)
-              c,
-        ];
-
-    final big = [for (final s in segs) if (s.$1.abs() >= _minTurn) s];
-    final lastEnd = segs.last.$3;
-    final (atLast, _) = posAt(lastEnd);
-    final walked = (atLast - _anchorS).abs();
-    final window = math.min(25.0, 8.0 + 0.10 * walked);
-    var net = 0.0;
-    for (final s in segs) {
-      net += s.$1;
-    }
-
-    // Match the turns in [seq] to corners in order.
-    ({double cost, RouteCorner corner, double end})? chainFor(List<(double, double, double)> seq) {
-      final (at0, _) = posAt(seq.first.$3);
-      ({double cost, RouteCorner corner, double end})? found;
-      for (final c0 in candidates(seq.first.$1, at0, window)) {
-        final chain = <RouteCorner>[c0];
-        var ok = true;
-        var cost = (c0.along - at0).abs();
-        for (var k = 1; k < seq.length; k++) {
-          final gap = _stepLength * _stepsBetween(seq[k - 1].$3, seq[k].$3);
-          final prev = chain.last;
-          final next = [
-            for (final c in candidates(seq[k].$1, prev.along + gap, 4.0))
-              if (c.along > prev.along + 0.5) c,
-          ];
-          if (next.isEmpty) {
-            ok = false;
-            break;
-          }
-          next.sort((a, b) =>
-              (a.along - prev.along - gap).abs().compareTo((b.along - prev.along - gap).abs()));
-          final c = next.first;
-          cost += (c.along - prev.along - gap).abs();
-          chain.add(c);
-        }
-        if (ok && (found == null || cost < found.cost)) {
-          found = (cost: cost, corner: chain.last, end: seq.last.$3);
-        }
-      }
-      return found;
-    }
-
-    // 1: every big turn is a corner, in order (one corner, or an S-bend).
-    var best = big.isEmpty ? null : chainFor(big);
-    // The phone twisted and back: nothing happened.
-    if (best == null && segs.length >= 2 && net.abs() < 30) return;
-    // 2: the net change is one corner (taken while twisting the phone).
-    if (best == null && net.abs() >= _minTurn) {
-      final cs = candidates(net, atLast, window);
-      if (cs.isNotEmpty) {
-        cs.sort((a, b) => (a.along - atLast).abs().compareTo((b.along - atLast).abs()));
-        best = (cost: (cs.first.along - atLast).abs(), corner: cs.first, end: lastEnd);
-      }
-    }
-    // 3: the first turns were corners, the rest something else.
-    var k = big.length - 1;
-    while (best == null && k >= 1) {
-      best = chainFor(big.sublist(0, k));
-      k--;
-    }
-    if (best == null) return;
-
-    final corner = best.corner;
-    final (atTurn, since) = posAt(best.end);
-    final z = corner.along + 0.8 + since;
-    final walkedSince = atTurn - _anchorS;
-    final err = (corner.along + 0.8) - atTurn;
-    if (walkedSince >= 12 && err.abs() <= 6 && _geo.placeAt(_f.s).indoor) {
-      // Inside, the corner says how long your steps really are.
-      final ratio = ((walkedSince + err) / walkedSince).clamp(0.85, 1.15).toDouble();
-      _stepLength = (_stepLength * math.sqrt(ratio)).clamp(0.45, 1.0).toDouble();
-    }
-    _f.updatePosition(z, 1.5 * 1.5);
-    _anchorS = corner.along;
-    _clamp();
-  }
-
-  /// Floors from air pressure, in climb episodes: while the pressure changes
-  /// you are on stairs or in a lift (steps do not move you along the floor);
-  /// when it settles, the change is counted in whole floors and compared
-  /// with the route.
-  void _onPressure(double p, double t) {
-    _press.add(p, t);
-    final ref = _startRefFloor;
-    if (ref != null) {
-      _startRefFloor = null;
-      _baro.setFloor(ref, basis: 'start');
-    }
-    if (!_running || _simulating) return;
-    final p5 = _press.ago(t, 5.0), p3 = _press.ago(t, 3.0);
-    if (p5 == null || p3 == null) return;
-    final d5 = p - p5, d3 = p - p3;
-    if (!_climbing) {
-      if (d5.abs() > _climbDp) {
-        final since = _fastSince ??= t;
-        if (t - since >= 0.5) {
-          _climbing = true;
-          _calmSince = null;
-          // Pressure on the floor we are leaving: just before the change began.
-          _p0 ??= _press.ago(t, 6.0) ?? p5;
-          _changed();
-        }
-      } else {
-        _fastSince = null;
-      }
-      return;
-    }
-
-    // Climbing. Near the route's stairs / lift: on the new floor already?
-    final r = _holdRide;
-    final p0 = _p0;
-    if (r != null && p0 != null && r.from - _f.s <= _rideNear) {
-      final expected = r.floors;
-      final floors = (p0 - p) / _baro.hPaPerFloor;
-      final p15 = _press.ago(t, 1.5);
-      final slowing = p15 != null && (p - p15).abs() < 0.03;
-      final off = (floors - expected).abs();
-      if (off <= 0.15 || (off <= 0.3 && slowing)) {
-        _learnP0 = p0;
-        _learnFloors = expected;
-        _confirm(r, by: 'barometer');
-        _p0 = null;
-        _pendingExtra = true;
-      }
-    }
-    if (d3.abs() < _calmDp) {
-      final calm = _calmSince ??= t;
-      if (t - calm >= _calmHold) {
-        _climbing = false;
-        _fastSince = null;
-        _climbEndT = calm - 2.0;
-        if (_pendingExtra) {
-          // The floor was confirmed during the climb; the steps taken on
-          // the new floor since the climb ended still count.
-          final n = _stepsSince(calm - 2.0);
-          _f.s = math.min(_geo.length, _f.s + math.min(10.0, _stepLength * n));
-          _pendingExtra = false;
-          _p0 = null;
-          final lp0 = _learnP0;
-          if (lp0 != null && _learnFloors != 0) {
-            _baro.learnFloorHeight((lp0 - p).abs() / _learnFloors.abs());
-          }
-          final place = _geo.placeAt(_f.s);
-          if (place.indoor) _baro.setFloor(place.floor, basis: 'stairs');
-          _clamp();
-        } else {
-          _settled(t, p);
-        }
-        _changed();
-      }
-    } else {
-      _calmSince = null;
-    }
-  }
-
-  /// A climb just ended: how many floors, and was it the route's stairs/lift?
-  void _settled(double t, double p) {
-    final p0 = _p0;
-    if (p0 == null) return;
-    final floors = (p0 - p) / _baro.hPaPerFloor;
-    final n = floors.round();
-    final r = _holdRide;
-    final expected = r?.floors ?? 0;
-    final close = r != null && r.from - _f.s <= _rideNear;
-    if (n == 0) {
-      if (!close) _p0 = null; // a ramp or a pressure blip: forget it
-      return;
-    }
-    if (r != null && close && n == expected && (floors - n).abs() <= 0.45) {
-      _confirm(r, base: p0, afterClimb: true, by: 'barometer');
-      _p0 = null;
-      final place = _geo.placeAt(_f.s);
-      if (place.indoor) _baro.setFloor(place.floor, basis: r.via);
-      return;
-    }
-    if (r != null && close && n * expected > 0 && n.abs() < expected.abs()) {
-      return; // a lift stopping on the way: keep counting from p0
-    }
-    _p0 = null;
-    // Not the route's stairs / lift: you changed floor somewhere else.
-    final place = _geo.placeAt(_f.s);
-    if (!place.indoor || _nearSameFloorStairs()) return;
-    _floorOffset += n;
-    _mismatch = _floorOffset == 0 ? null : place.floor + _floorOffset;
-    if (_mismatch != null) _notice = null;
-  }
-
-  /// The route climbs a staircase that stays on the same floor (e.g. a
-  /// spiral stair to an attic) close to here: climbing there is expected.
-  bool _nearSameFloorStairs() {
-    final steps = _route.steps;
-    if (_geo.stepAlong.length != steps.length) return false;
-    for (var k = 0; k + 1 < steps.length; k++) {
-      if (steps[k].type != 'stairs' || steps[k + 1].floor != steps[k].floor) continue;
-      final at = _geo.stepAlong[k];
-      if (at >= _f.s - 15 && at <= _f.s + _rideNear) return true;
-    }
-    return false;
   }
 
   /// You are on the new floor of ride [r].

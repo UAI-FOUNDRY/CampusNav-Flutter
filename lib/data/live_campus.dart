@@ -18,7 +18,7 @@ class LiveCampus {
   ];
 
   /// Turns the text inside a QR code into a start point.
-  /// Accepts "campusnav:<node id>" or just "<node id>".
+  /// Accepts `campusnav:<node id>` or just `<node id>`.
   ///
   /// The app cannot check the id offline, so any well-formed id is accepted;
   /// the backend answers 404 "unknown start" if it is not on the map.

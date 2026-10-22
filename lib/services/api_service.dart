@@ -333,7 +333,7 @@ class ApiService {
   static bool _isSearchable(Destination d) =>
       d.id.isNotEmpty && !d.name.toLowerCase().contains('junction');
 
-  /// GET /api/route?from=<id>&to=<id>[&accessible=1]
+  /// `GET /api/route?from=<id>&to=<id>[&accessible=1]`
   ///
   /// [startName] is only used to label the first step ("You are here").
   Future<NavigationRoute> getRoute({

@@ -131,11 +131,11 @@ class ZoomableViewState extends State<ZoomableView>
   }
 
   @override
-  void didUpdateWidget(ZoomableView old) {
-    super.didUpdateWidget(old);
+  void didUpdateWidget(ZoomableView oldWidget) {
+    super.didUpdateWidget(oldWidget);
     // A new starting view (e.g. the screen got shorter when the keyboard
     // opened) is applied only if nobody has moved the view yet.
-    if (old.focus != widget.focus && !_moved) _focusApplied = false;
+    if (oldWidget.focus != widget.focus && !_moved) _focusApplied = false;
   }
 
   @override

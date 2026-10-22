@@ -132,9 +132,18 @@ At a desk: start navigation, tap the status line above the buttons and switch on
 route at 1.3 m/s and takes the stairs / lift by itself). The same sheet shows every sensor reading.
 
 On the stairs, hold the phone as usual: the card shows the climb and closes on the new floor. If your phone has no
-barometer (some cheaper Android phones), tap "I'm on floor N" as before.
+barometer (some cheaper Android phones), the card closes once your steps have climbed the floors (or tap
+"I'm on floor N").
 
 Deploying the backend (the backend repo has a `render.yaml` for Render) removes this limit.
+
+### Automated tests
+`flutter test` runs, among others, whole trips on real campus routes (`test/fixtures`), with the sensors replayed as a
+phone delivers them on a test clock: gate to the Innovation Lab (GPS outside, steps inside, stairs with the
+barometer), the lobby stairs with and without a barometer (counted and learned steps), and GPS far off the path
+asking for a new route. They check that the stairs card closes by itself, the arrow stays within a few metres of
+the walker, the steps only move forward and arrival is detected. A real walk is still the final test for the sensors
+themselves.
 
 ---
 
@@ -186,7 +195,11 @@ lib/
     location_service.dart       GPS permission and the precise position stream
     spot_locator.dart           "Use my location": GPS + floor + Wi-Fi, ranks every spot
     route_tracker.dart          the whole route in metres (outside + every floor), corners, rides
-    live_guide.dart             live guidance engine: GPS, steps, turns, floors, compass
+    live_guide.dart             live guidance engine (one library in four files):
+      live_guide_types.dart       what it hands the screen (pose, floor card)
+      live_guide_position.dart    GPS fixes, steps and turns -> where you are
+      live_guide_floors.dart      stairs, lifts, barometer, Wi-Fi floor -> which floor
+    guide_tuning.dart           every live-guidance tuning value, in one place
     position_filter.dart        the Kalman filter along the route
     motion_sensors.dart         step and turn detectors, compass
     floor_barometer.dart        floors from air pressure, weather-corrected reference
@@ -215,11 +228,9 @@ The numbers were tuned by simulating walks on real routes of this campus (gate t
 by stairs, lobby to the AR/VR lab by lift ...) with realistic sensor noise: the arrow stays within about 2 to 5 m
 inside (90 % of the time) and 2 to 4 m outside, never steps backwards, and the stairs / lift card closed by itself
 on every simulated ride.
+- `services/guide_tuning.dart`: every live-guidance value in one place, each with what it does: step length (0.72 m to begin with, then learned), GPS accuracy limits and off-route rule (25 m, 3 fixes), reroute at most every 15 s, arrival distances, corner matching (45 degree turns, 60 degree tolerance), climb detection (0.06 hPa in 5 s), stairs steps per floor (24, learned), and the outdoor camera (turns in 0.45 s, looks 15 m ahead, you sit 0.22 of the height below the middle)
 - `services/floor_barometer.dart`: `metresPerFloor` (4 m; measure the building and change it, the app also learns it on every ride)
-- `services/live_guide.dart`: default step length 0.72 m (learned and saved), climb detection (0.06 hPa in 5 s), how close a climb must be to the route's stairs (40 m), turn matching (45 degree turns, 60 degree tolerance)
 - `services/spot_locator.dart`: how long "Use my location" listens to GPS (up to 10 s) and when it is sure enough not to ask
-- `navigation_screen.dart`: off-route reroute at most every 15 s
-- `live_route_map.dart`: how fast the map turns (`0.45` s), how far ahead it looks (15 m), how low you sit on screen (`0.22` of the height)
 - `zoomable_view.dart`: rotation threshold (15 degrees, 35 while zooming)
 
 ---
@@ -229,7 +240,7 @@ on every simulated ride.
 - Inside, position comes from steps and turns: it drifts a few percent between corners. Corners, floor changes, signs and Next correct it; with a step length far from yours it may need "I've arrived" on short indoor routes
 - GPS alone cannot name a room indoors: "Use my location" asks there until the Wi-Fi has learned the room (Android). iPhones cannot scan Wi-Fi, so on iPhone it always asks indoors (scan a sign for an exact start)
 - The exact floor needs a recent reference (outside next to the building, the door, a ride, a sign or a picked spot), corrected for the weather with the free Open-Meteo forecast. Floor *changes* on the route's stairs / lift need no reference
-- Phones without a barometer or gyroscope fall back to the "I'm on floor N" button and to steps without corner matching
+- Phones without a barometer count stair steps and feel lift rides instead, which closes the floor card less promptly; the "I'm on floor N" button is always there. Without a gyroscope, turns come from the magnetic compass, which steel and wiring indoors can bend, so corners are matched less reliably
 - The backend runs on a laptop: rerouting and new routes need the phone to reach it
 - Map tiles (Esri World Imagery, OpenStreetMap) are free for light use with attribution; check their terms or use a keyed provider before a public launch
 - Demo mode's schematic map is not part of the live app and has not had the accessibility pass

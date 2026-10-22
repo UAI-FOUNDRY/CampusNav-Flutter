@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../models/route.dart';
 import '../services/live_guide.dart';
 import '../theme/app_colors.dart';
+import '../theme/destination_style.dart';
 import 'live_floor_plan.dart';
 import 'zoomable_view.dart';
 
@@ -85,10 +86,10 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
   }
 
   @override
-  void didUpdateWidget(FloorPlanViewer old) {
-    super.didUpdateWidget(old);
-    if (old.live != widget.live) {
-      old.live?.removeListener(_onLive);
+  void didUpdateWidget(FloorPlanViewer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.live != widget.live) {
+      oldWidget.live?.removeListener(_onLive);
       widget.live?.addListener(_onLive);
     }
   }
@@ -113,10 +114,11 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
     );
     final at = zoom.toScreen(child);
     final visible = math.max(1.0, _view.height - widget.bottomInset);
+    final band = math.max(1.0, visible - widget.topInset);
     final inside = at.dx > _view.width * 0.22 &&
         at.dx < _view.width * 0.78 &&
-        at.dy > widget.topInset + visible * 0.18 &&
-        at.dy < visible * 0.72;
+        at.dy > widget.topInset + band * 0.12 &&
+        at.dy < widget.topInset + band * 0.8;
     if (inside) return;
     _lastFollow = now;
     showImagePoint(plan.x, plan.y);
@@ -139,12 +141,14 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
       _picture.left + x / widget.imageWidth * _picture.width,
       _picture.top + y / widget.imageHeight * _picture.height,
     );
-    // Middle of the part of the view the bottom card does not cover.
+    // Middle of the part of the view that nothing covers (a card at the
+    // bottom, chips or the turn card at the top).
     final visible = math.max(1.0, _view.height - widget.bottomInset);
+    final top = math.min(widget.topInset, visible * 0.5);
     _zoomKey.currentState?.showPoint(
       point,
       minZoom: _coverScale() * 1.6,
-      anchor: Offset(0.5, (visible * 0.45) / _view.height),
+      anchor: Offset(0.5, (top + (visible - top) * 0.45) / _view.height),
     );
   }
 
@@ -226,57 +230,99 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                 ),
               ),
             ),
-            // Shown while the plan is turned; tap to turn it back north-up.
-            Positioned(
-              right: 12,
-              top: widget.topInset + 12,
-              child: AnimatedScale(
-                scale: _rotation.abs() > 0.01 ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 180),
-                child: _Compass(
-                  rotation: _rotation,
-                  onTap: () => _zoomKey.currentState?.resetRotation(),
-                ),
-              ),
-            ),
-            // Moved by hand during guidance: one tap follows you again.
-            if (widget.live != null && !_follow)
+            // Without the zoom buttons (small cards): the compass at the top
+            // while the plan is turned, "Centre on me" at the bottom.
+            if (!widget.controls)
               Positioned(
                 right: 12,
-                bottom: widget.bottomInset + (widget.controls ? 170 : 16),
-                child: Material(
-                  color: Colors.white,
-                  elevation: 3,
-                  shape: const CircleBorder(),
-                  child: IconButton(
-                    tooltip: 'Centre on me',
-                    icon: const Icon(Icons.my_location, size: 22, color: AppColors.ink),
-                    onPressed: _centreOnMe,
+                top: widget.topInset + 12,
+                child: AnimatedScale(
+                  scale: _rotation.abs() > 0.01 ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 180),
+                  child: _Compass(
+                    rotation: _rotation,
+                    onTap: () => _zoomKey.currentState?.resetRotation(),
                   ),
                 ),
               ),
+            if (!widget.controls && widget.live != null && !_follow)
+              Positioned(
+                right: 12,
+                bottom: widget.bottomInset + 16,
+                child: _CentreOnMe(onTap: _centreOnMe),
+              ),
+            // With them: one column at the bottom right, clear of anything
+            // shown at the top (chips, the turn card during guidance).
             if (widget.controls)
               Positioned(
-              right: 12,
-              bottom: widget.bottomInset + 16,
-              child: _ZoomButtons(
-                onIn: () => _zoomKey.currentState?.zoomBy(1.6),
-                onOut: () => _zoomKey.currentState?.zoomBy(1 / 1.6),
-                onFit: () {
-                  final z = _zoomKey.currentState;
-                  if (z == null) return;
-                  // First press: back to the start view. Again: whole floor.
-                  if (z.atHome) {
-                    z.showAll();
-                  } else {
-                    z.reset();
-                  }
-                },
+                right: 12,
+                bottom: widget.bottomInset + 16,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // Shown while the plan is turned; tap to turn it north-up.
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      child: _rotation.abs() > 0.01
+                          ? Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _Compass(
+                                rotation: _rotation,
+                                onTap: () => _zoomKey.currentState?.resetRotation(),
+                              ),
+                            )
+                          : const SizedBox(width: 44),
+                    ),
+                    // Moved by hand during guidance: one tap follows you again.
+                    if (widget.live != null && !_follow) ...[
+                      _CentreOnMe(onTap: _centreOnMe, color: widget.color),
+                      const SizedBox(height: 10),
+                    ],
+                    _ZoomButtons(
+                      onIn: () => _zoomKey.currentState?.zoomBy(1.6),
+                      onOut: () => _zoomKey.currentState?.zoomBy(1 / 1.6),
+                      onFit: () {
+                        final z = _zoomKey.currentState;
+                        if (z == null) return;
+                        // First press: back to the start view. Again: whole floor.
+                        if (z.atHome) {
+                          z.showAll();
+                        } else {
+                          z.reset();
+                        }
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ),
           ],
         );
       },
+    );
+  }
+}
+
+/// "Centre on me" during guidance, filled in the route colour so it stands
+/// out once the plan has been moved by hand.
+class _CentreOnMe extends StatelessWidget {
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _CentreOnMe({required this.onTap, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = color;
+    return Material(
+      color: c ?? Colors.white,
+      elevation: 3,
+      shape: const CircleBorder(),
+      child: IconButton(
+        tooltip: 'Centre on me',
+        icon: Icon(Icons.my_location, size: 22, color: c == null ? AppColors.ink : readableOnLine(c)),
+        onPressed: onTap,
+      ),
     );
   }
 }

@@ -27,7 +27,7 @@ Future<void> openScanner(
 
 /// Scans a QR code on a campus signboard and sets the user's start location.
 ///
-/// A code contains "campusnav:<node id>", for example "campusnav:acad_entrance".
+/// A code contains `campusnav:<node id>`, for example "campusnav:acad_entrance".
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
 

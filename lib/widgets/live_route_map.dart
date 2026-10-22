@@ -8,7 +8,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/destination.dart';
 import '../models/route.dart';
-import '../services/live_guide.dart';
+import '../services/live_guide.dart'; // also GuideTuning
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
 import 'person_marker.dart';
@@ -103,7 +103,8 @@ class LiveCampusMap extends StatefulWidget {
 class _LiveCampusMapState extends State<LiveCampusMap>
     with TickerProviderStateMixin {
   static const _dist = Distance(roundResult: false); // keep sub-metre precision
-  static const _followZoom = 18.5;
+  static const _followZoom = GuideTuning.followZoom;
+  static const _person = PersonMarker(color: Colors.transparent, size: 36); // for its sizes
 
   final _controller = MapController();
   late final AnimationController _anim;
@@ -179,7 +180,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   void didUpdateWidget(LiveCampusMap old) {
     super.didUpdateWidget(old);
     if (widget.live != null) {
-      if (_frames == null) _frames = createTicker(_onFrame)..start();
+      _frames ??= createTicker(_onFrame)..start();
       return; // the live pose drives the icon, frame by frame
     }
     final now = widget.person;
@@ -258,17 +259,18 @@ class _LiveCampusMapState extends State<LiveCampusMap>
       } else if (diff.abs() > 1.0) {
         // Ease the short way round, about half a second to settle; wobbles
         // under 1 degree are ignored so the map does not tremble.
-        b = _wrap360(b + diff * (1 - math.exp(-dt / 0.45)));
+        b = _wrap360(b + diff * (1 - math.exp(-dt / GuideTuning.headingEaseSeconds)));
       }
     }
     _bearing = b;
 
-    // Put the person 22 % of the screen below the middle: the middle of the
-    // map is that many metres ahead of them, in the direction of travel.
+    // Put the person GuideTuning.personBelowCentre (22 %) of the screen
+    // below the middle: the middle of the map is that many metres ahead of
+    // them, in the direction of travel.
     final h = _controller.camera.nonRotatedSize.height;
     final metresPerPixel =
         156543.03392 * math.cos(me.latitude * math.pi / 180) / math.pow(2, zoom);
-    final center = _dist.offset(me, h * 0.22 * metresPerPixel, b);
+    final center = _dist.offset(me, h * GuideTuning.personBelowCentre * metresPerPixel, b);
     if (center == _shownCenter && b == _shownBearing) return;
     _controller.moveAndRotate(center, zoom, -b);
     _shownCenter = center;
@@ -286,14 +288,14 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   static double _wrap360(double a) => (a % 360 + 360) % 360;
 
   /// Compass direction (0 = north, clockwise) of the path from [p] towards a
-  /// point about 15 m further along it. Looking a little ahead makes the map
+  /// point a little further along it ([GuideTuning.headingLookAheadMetres]). Looking a little ahead makes the map
   /// start turning just before a corner, not after it.
   double? _headingAt(LatLng p) {
     final line = _line;
     if (line.length < 2) return null;
     final at = _onLine(line, p);
     var from = at.point;
-    var left = 15.0;
+    var left = GuideTuning.headingLookAheadMetres;
     var target = line.last;
     for (var i = at.seg + 1; i < line.length; i++) {
       final step = _dist.distance(from, line[i]);
@@ -596,11 +598,11 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                       if (me != null)
                         Marker(
                           point: me,
-                          width: 96,
-                          height: 96,
+                          width: _person.beamSize,
+                          height: _person.beamSize,
                           child: PersonMarker(
                             color: _offRoute ? AppColors.sportsInk : widget.color,
-                            size: 36,
+                            size: _person.size,
                             facing: _facing == null ? null : (_facing! + _rotation) * math.pi / 180,
                           ),
                         ),
@@ -622,46 +624,37 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                 ),
               ],
             ),
-            // Shown while the map is turned; tap to turn it back north-up.
-            Positioned(
-              left: widget.fill ? null : 10,
-              right: widget.fill ? 12 : null,
-              top: widget.topInset + (widget.fill ? 12 : 10),
-              child: AnimatedScale(
-                scale: _rotation.abs() > 0.5 ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 180),
-                child: Material(
-                  color: Colors.white,
-                  elevation: 3,
-                  shape: const CircleBorder(),
-                  child: IconButton(
-                    tooltip: 'Turn back north-up',
-                    onPressed: () {
-                      // Heading-up: switch to north-up (Centre on me turns it back).
-                      setState(() {
-                        _rotation = 0;
-                        _northUp = true;
-                        _bearing = null;
-                      });
-                      if (_ready) _controller.rotate(0);
-                      final me = _me;
-                      if (me != null && widget.follow && !_free) _followCamera();
-                    },
-                    icon: Transform.rotate(
-                      angle: _rotation * math.pi / 180,
-                      child: const Icon(Icons.navigation, size: 22, color: AppColors.danger),
-                    ),
-                  ),
+            // Card mode: shown at the top while the map is turned; tap to
+            // turn it back north-up. (Full screen: in the button column.)
+            if (!widget.fill)
+              Positioned(
+                left: 10,
+                top: widget.topInset + 10,
+                child: AnimatedScale(
+                  scale: _rotation.abs() > 0.5 ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 180),
+                  child: _compassButton(),
                 ),
               ),
-            ),
             if (widget.fill)
               Positioned(
                 right: 12,
                 bottom: 20 + widget.bottomInset,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
+                    // Full screen: the compass sits with the other buttons,
+                    // clear of the instruction card at the top.
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      child: _rotation.abs() > 0.5
+                          ? Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _compassButton(),
+                            )
+                          : const SizedBox(width: 48),
+                    ),
                     _roundButton(
                       icon: _satellite ? Icons.map_outlined : Icons.satellite_alt,
                       tooltip: _satellite ? 'Street map' : 'Satellite',
@@ -669,12 +662,15 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                     ),
                     if (me != null) ...[
                       const SizedBox(height: 10),
+                      // Moved by hand while following: filled in the route
+                      // colour so "back to me" is easy to spot.
                       _roundButton(
                         icon: Icons.my_location,
                         tooltip: widget.follow && widget.headingUp
                             ? 'Follow me, direction up'
                             : 'Centre on me',
                         onTap: () => _recentre(me),
+                        highlight: widget.follow && _free,
                       ),
                     ],
                   ],
@@ -741,15 +737,43 @@ class _LiveCampusMapState extends State<LiveCampusMap>
     required IconData icon,
     required String tooltip,
     required VoidCallback onTap,
+    bool highlight = false,
   }) {
+    return Material(
+      color: highlight ? widget.color : Colors.white,
+      elevation: 3,
+      shape: const CircleBorder(),
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, size: 22, color: highlight ? readableOnLine(widget.color) : AppColors.ink),
+        onPressed: onTap,
+      ),
+    );
+  }
+
+  /// Needle pointing north on screen; tap to turn the map back north-up.
+  Widget _compassButton() {
     return Material(
       color: Colors.white,
       elevation: 3,
       shape: const CircleBorder(),
       child: IconButton(
-        tooltip: tooltip,
-        icon: Icon(icon, size: 22, color: AppColors.ink),
-        onPressed: onTap,
+        tooltip: 'Turn back north-up',
+        onPressed: () {
+          // Heading-up: switch to north-up (Centre on me turns it back).
+          setState(() {
+            _rotation = 0;
+            _northUp = true;
+            _bearing = null;
+          });
+          if (_ready) _controller.rotate(0);
+          final me = _me;
+          if (me != null && widget.follow && !_free) _followCamera();
+        },
+        icon: Transform.rotate(
+          angle: _rotation * math.pi / 180,
+          child: const Icon(Icons.navigation, size: 22, color: AppColors.danger),
+        ),
       ),
     );
   }

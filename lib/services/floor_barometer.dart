@@ -57,6 +57,10 @@ class FloorBarometer {
   static const double metresPerFloor = 4.0;
   static const double hPaPerMetre = 0.113;
 
+  /// Tests: no weather download.
+  @visibleForTesting
+  static bool weatherEnabled = true;
+
   static const double _campusLat = 18.9027;
   static const double _campusLng = 73.3742;
 
@@ -331,6 +335,7 @@ class FloorBarometer {
   /// Fetches the campus forecast (Open-Meteo) if the saved one is older than
   /// half an hour. Never throws; offline it simply keeps what it has.
   Future<void> refreshWeather() {
+    if (!weatherEnabled) return Future<void>.value();
     final fetched = _wFetched;
     if (fetched != null && DateTime.now().difference(fetched) < const Duration(minutes: 30)) {
       return Future<void>.value();

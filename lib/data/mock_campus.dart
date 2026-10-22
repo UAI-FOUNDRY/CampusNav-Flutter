@@ -227,7 +227,7 @@ class MockCampus {
   }
 
   /// Turns the text inside a QR code into a start point.
-  /// Accepts "campusnav:<node id>" or just "<node id>". Returns null for
+  /// Accepts `campusnav:<node id>` or just `<node id>`. Returns null for
   /// codes that are not from this campus.
   static StartPoint? startPointFromCode(String raw) {
     var id = raw.trim();

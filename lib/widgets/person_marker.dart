@@ -19,8 +19,9 @@ class PersonMarker extends StatelessWidget {
   /// The marker is bigger than the disc because of the halo.
   double get outerSize => size * 1.6;
 
-  /// Room needed when the beam is shown.
-  double get beamSize => size * 2.7;
+  /// Room needed when the beam is shown (long enough to stand out past the
+  /// halo, even on the satellite map).
+  double get beamSize => size * 3.4;
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +73,9 @@ class PersonMarker extends StatelessWidget {
         children: [
           Positioned.fill(
             child: IgnorePointer(
-              child: CustomPaint(painter: _BeamPainter(color: color, angle: f)),
+              child: CustomPaint(
+                painter: _BeamPainter(color: color, angle: f, inner: outerSize / beamSize),
+              ),
             ),
           ),
           disc,
@@ -82,28 +85,48 @@ class PersonMarker extends StatelessWidget {
   }
 }
 
-/// A soft wedge from the centre towards [angle].
+/// A soft wedge from the centre towards [angle]: strong at the halo's edge,
+/// fading out, over a faint white wedge so it shows on dark satellite
+/// imagery as well as on the white floor plans.
 class _BeamPainter extends CustomPainter {
   final Color color;
   final double angle; // radians, clockwise from up
+  final double inner; // the halo's radius as a fraction of the beam's
 
-  const _BeamPainter({required this.color, required this.angle});
+  const _BeamPainter({required this.color, required this.angle, required this.inner});
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
     final r = size.shortestSide / 2;
-    const half = 35 * math.pi / 180;
+    const half = 32 * math.pi / 180;
     // Canvas angles start at "right" (east); "up" is -pi/2.
     final start = angle - math.pi / 2 - half;
     final rect = Rect.fromCircle(center: c, radius: r);
-    final paint = Paint()
+    final stops = [0.0, inner.clamp(0.0, 0.9).toDouble(), 1.0];
+    final under = Paint()
       ..shader = RadialGradient(
-        colors: [color.withValues(alpha: 0.45), color.withValues(alpha: 0.0)],
+        colors: [
+          Colors.white.withValues(alpha: 0.55),
+          Colors.white.withValues(alpha: 0.45),
+          Colors.white.withValues(alpha: 0.0),
+        ],
+        stops: stops,
       ).createShader(rect);
-    canvas.drawArc(rect, start, 2 * half, true, paint);
+    final beam = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          color.withValues(alpha: 0.75),
+          color.withValues(alpha: 0.6),
+          color.withValues(alpha: 0.0),
+        ],
+        stops: stops,
+      ).createShader(rect);
+    canvas.drawArc(rect, start, 2 * half, true, under);
+    canvas.drawArc(rect, start, 2 * half, true, beam);
   }
 
   @override
-  bool shouldRepaint(_BeamPainter old) => old.angle != angle || old.color != color;
+  bool shouldRepaint(_BeamPainter old) =>
+      old.angle != angle || old.color != color || old.inner != inner;
 }
