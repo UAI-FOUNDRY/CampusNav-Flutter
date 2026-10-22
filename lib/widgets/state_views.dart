@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
@@ -5,22 +6,24 @@ import '../theme/app_colors.dart';
 /// Grey placeholder cards shown while data loads.
 class LoadingList extends StatelessWidget {
   final int count;
+
   const LoadingList({super.key, this.count = 5});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (var i = 0; i < count; i++)
-          Container(
-            height: 72,
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: AppColors.mist,
-              borderRadius: BorderRadius.circular(16),
-            ),
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      itemCount: count,
+      itemBuilder: (context, index) {
+        return Container(
+          height: 72,
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: AppColors.mist,
+            borderRadius: BorderRadius.circular(16),
           ),
-      ],
+        );
+      },
     );
   }
 }
@@ -48,13 +51,19 @@ class ErrorView extends StatelessWidget {
   });
 
   (IconData, String) get _look => switch (kind) {
-        ApiErrorKind.offline => (Icons.wifi_off_rounded, "Can't reach the server"),
-        ApiErrorKind.timeout => (Icons.hourglass_bottom_rounded, 'The server is slow'),
-        ApiErrorKind.noRoute => (Icons.alt_route_rounded, 'No route to this place'),
-        ApiErrorKind.offCampus => (Icons.location_off_outlined, "You're off the campus paths"),
-        ApiErrorKind.notFound => (Icons.wrong_location_outlined, 'Place not found'),
+        ApiErrorKind.offline =>
+          (Icons.wifi_off_rounded, "Can't reach the server"),
+        ApiErrorKind.timeout =>
+          (Icons.hourglass_bottom_rounded, 'The server is slow'),
+        ApiErrorKind.noRoute =>
+          (Icons.alt_route_rounded, 'No route to this place'),
+        ApiErrorKind.offCampus =>
+          (Icons.location_off_outlined, "You're off the campus paths"),
+        ApiErrorKind.notFound =>
+          (Icons.wrong_location_outlined, 'Place not found'),
         ApiErrorKind.rateLimited => (Icons.timer_outlined, 'One moment'),
-        ApiErrorKind.server => (Icons.error_outline_rounded, 'Something went wrong'),
+        ApiErrorKind.server =>
+          (Icons.error_outline_rounded, 'Something went wrong'),
       };
 
   /// Retrying helps when the network or server hiccuped, not when the
@@ -81,10 +90,13 @@ class ErrorView extends StatelessWidget {
           )
         : TextButton.icon(
             onPressed: onRetry,
-            style: TextButton.styleFrom(minimumSize: const Size(160, 48)),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(160, 48),
+            ),
             icon: const Icon(Icons.refresh),
             label: const Text('Try again'),
           );
+
     final action = onAction == null
         ? null
         : (_retryFirst
@@ -113,21 +125,37 @@ class ErrorView extends StatelessWidget {
               Container(
                 width: 88,
                 height: 88,
-                decoration: const BoxDecoration(color: AppColors.mist, shape: BoxShape.circle),
-                child: Icon(icon, size: 44, color: AppColors.inkMuted),
+                decoration: const BoxDecoration(
+                  color: AppColors.mist,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  icon,
+                  size: 44,
+                  color: AppColors.inkMuted,
+                ),
               ),
               const SizedBox(height: 18),
-              Text(title, style: text.titleLarge, textAlign: TextAlign.center),
+              Text(
+                title,
+                style: text.titleLarge,
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 8),
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
+                style: text.bodyMedium?.copyWith(
+                  color: AppColors.inkMuted,
+                ),
               ),
               const SizedBox(height: 24),
               if (_retryFirst) ...[
                 retry,
-                if (action != null) ...[const SizedBox(height: 10), action],
+                if (action != null) ...[
+                  const SizedBox(height: 10),
+                  action,
+                ],
               ] else ...[
                 action!,
                 const SizedBox(height: 6),
@@ -157,20 +185,30 @@ class EmptyView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 56, color: AppColors.inkMuted),
+            Icon(
+              icon,
+              size: 56,
+              color: AppColors.inkMuted,
+            ),
             const SizedBox(height: 16),
-            Text(title, style: text.titleMedium),
+            Text(
+              title,
+              style: text.titleMedium,
+            ),
             const SizedBox(height: 6),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
+              style: text.bodyMedium?.copyWith(
+                color: AppColors.inkMuted,
+              ),
             ),
           ],
         ),

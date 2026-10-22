@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import '../models/destination.dart';
 import '../state/app_state.dart';
@@ -45,24 +46,32 @@ class QuickTile extends StatelessWidget {
                 Container(height: 5, color: line),
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Icon(iconForType(destination.type), color: lineInk(line), size: 24),
+                            Icon(
+                              iconForType(destination.type),
+                              color: lineInk(line),
+                              size: 24,
+                            ),
                             const Spacer(),
                             ValueListenableBuilder<List<String>>(
                               valueListenable: AppState.favorites,
                               builder: (context, favorites, _) =>
                                   favorites.contains(destination.id)
-                                      ? const Icon(Icons.star, size: 16, color: AppColors.sports)
+                                      ? const Icon(
+                                          Icons.star,
+                                          size: 16,
+                                          color: AppColors.sports,
+                                        )
                                       : const SizedBox.shrink(),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 6),
                         Text(
                           destination.name,
                           maxLines: 1,
@@ -71,7 +80,11 @@ class QuickTile extends StatelessWidget {
                         ),
                         Text(
                           floorLabel(destination.floor),
-                          style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: text.bodySmall?.copyWith(
+                            color: AppColors.inkMuted,
+                          ),
                         ),
                       ],
                     ),
@@ -81,17 +94,28 @@ class QuickTile extends StatelessWidget {
                   Container(
                     width: double.infinity,
                     color: line.withValues(alpha: 0.12),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
                     child: Row(
                       children: [
-                        Icon(Icons.directions_walk, size: 15, color: lineInk(line)),
+                        Icon(
+                          Icons.directions_walk,
+                          size: 15,
+                          color: lineInk(line),
+                        ),
                         const SizedBox(width: 4),
-                        Text(
-                          '$minutes min walk',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: lineInk(line),
+                        Expanded(
+                          child: Text(
+                            '$minutes min walk',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: lineInk(line),
+                            ),
                           ),
                         ),
                       ],
@@ -109,4 +133,6 @@ class QuickTile extends StatelessWidget {
 /// Demo data is coloured by building (its schematic map); the real campus by
 /// the kind of place, like metro lines.
 Color _lineFor(Destination d) =>
-    ApiService.useMock ? lineColorForBuilding(d.building) : colorForType(d.type);
+    ApiService.useMock
+        ? lineColorForBuilding(d.building)
+        : colorForType(d.type);
