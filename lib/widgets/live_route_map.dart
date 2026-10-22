@@ -61,6 +61,11 @@ class LiveCampusMap extends StatefulWidget {
   /// Space kept clear at the top (chips over the map); the compass sits below.
   final double topInset;
 
+  /// Full screen: put the compass at the top right, this far from the top
+  /// (e.g. just below the turn card during navigation) instead of in the
+  /// button column at the bottom.
+  final double? compassTop;
+
   /// How long the person icon takes to glide to a new [person] position.
   final Duration glide;
 
@@ -91,6 +96,7 @@ class LiveCampusMap extends StatefulWidget {
     this.fill = false,
     this.bottomInset = 0,
     this.topInset = 0,
+    this.compassTop,
     this.glide = const Duration(milliseconds: 1400),
     this.smoothLive = false,
     this.live,
@@ -626,10 +632,11 @@ class _LiveCampusMapState extends State<LiveCampusMap>
             ),
             // Card mode: shown at the top while the map is turned; tap to
             // turn it back north-up. (Full screen: in the button column.)
-            if (!widget.fill)
+            if (!widget.fill || widget.compassTop != null)
               Positioned(
-                left: 10,
-                top: widget.topInset + 10,
+                left: widget.fill ? null : 10,
+                right: widget.fill ? 12 : null,
+                top: widget.fill ? widget.compassTop : widget.topInset + 10,
                 child: AnimatedScale(
                   scale: _rotation.abs() > 0.5 ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 180),
@@ -648,7 +655,7 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                     // clear of the instruction card at the top.
                     AnimatedSize(
                       duration: const Duration(milliseconds: 180),
-                      child: _rotation.abs() > 0.5
+                      child: _rotation.abs() > 0.5 && widget.compassTop == null
                           ? Padding(
                               padding: const EdgeInsets.only(bottom: 10),
                               child: _compassButton(),

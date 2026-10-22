@@ -92,6 +92,19 @@ class _NavigationScreenState extends State<NavigationScreen>
   LiveGuide? _guide;
   Ticker? _frames;
   bool _rerouting = false;
+
+  // The turn card (and the wrong-floor banner under it) at the top of the
+  // navigation view: its height, so the compass sits right below it.
+  final _topCardKey = GlobalKey();
+  double _topCardHeight = 110;
+
+  void _measureTopCard() {
+    if (!mounted) return;
+    final box = _topCardKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final h = box.size.height;
+    if ((h - _topCardHeight).abs() > 1) setState(() => _topCardHeight = h);
+  }
   DateTime? _lastReroute;
 
   /// The route is drawn in the colour of the place's line (labs purple,
@@ -989,6 +1002,7 @@ class _NavigationScreenState extends State<NavigationScreen>
   Widget _liveGuidance(NavigationRoute route) {
     final step = route.steps[_stepIndex];
     final top = MediaQuery.of(context).padding.top;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureTopCard());
     final g = _guide;
     final wait = g?.wait;
     // Live: the stairs / lift card comes from where you are (and closes by
@@ -1007,7 +1021,9 @@ class _NavigationScreenState extends State<NavigationScreen>
         Expanded(
           child: Stack(
             children: [
-              Positioned.fill(child: _guidanceMap(route, step)),
+              // The compass goes just below the turn card (measured after
+              // each layout: the card grows with longer instructions).
+              Positioned.fill(child: _guidanceMap(route, step, top + 8 + _topCardHeight + 10)),
               // A soft white fade so the phone's clock and battery stay readable.
               Positioned(
                 top: 0,
@@ -1036,6 +1052,7 @@ class _NavigationScreenState extends State<NavigationScreen>
                 left: 12,
                 right: 12,
                 child: Column(
+                  key: _topCardKey,
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -1116,7 +1133,7 @@ class _NavigationScreenState extends State<NavigationScreen>
   /// The outdoor map while you are outside, the floor plan of your floor
   /// once you are inside. Live, the person icon follows you every frame;
   /// otherwise it sits at the start of the current step.
-  Widget _guidanceMap(NavigationRoute route, RouteStep step) {
+  Widget _guidanceMap(NavigationRoute route, RouteStep step, double compassTop) {
     final g = _guide;
     final pose = g?.pose.value;
     final inside = pose?.indoor ?? step.space == 'indoor';
@@ -1136,6 +1153,7 @@ class _NavigationScreenState extends State<NavigationScreen>
         // The way you are walking points up, like Google Maps navigation.
         headingUp: true,
         fill: true,
+        compassTop: compassTop,
       );
     } else {
       RouteLeg? found;
@@ -1164,8 +1182,9 @@ class _NavigationScreenState extends State<NavigationScreen>
                 person: g == null && px != null && py != null ? MapPoint(px, py) : null,
                 live: g?.pose,
                 focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
-                // Keep "you" below the instruction card at the top.
-                topInset: MediaQuery.of(context).padding.top + 140,
+                // Keep "you" and the compass below the turn card at the top.
+                topInset: compassTop,
+                compassTop: compassTop,
               ),
             ),
             Positioned(

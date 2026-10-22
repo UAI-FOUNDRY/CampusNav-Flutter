@@ -38,6 +38,11 @@ class FloorPlanViewer extends StatefulWidget {
   /// below it.
   final double topInset;
 
+  /// Put the compass at the top right, this far from the top (e.g. just
+  /// below the turn card during navigation) instead of above the zoom
+  /// buttons.
+  final double? compassTop;
+
   /// Live guidance: where you are, every frame. The person icon follows it
   /// (with the compass beam) and the view keeps it on screen until you move
   /// the plan by hand ("Centre on me" follows again).
@@ -57,6 +62,7 @@ class FloorPlanViewer extends StatefulWidget {
     this.bottomInset = 0,
     this.controls = true,
     this.topInset = 0,
+    this.compassTop,
     this.live,
   });
 
@@ -232,10 +238,10 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
             ),
             // Without the zoom buttons (small cards): the compass at the top
             // while the plan is turned, "Centre on me" at the bottom.
-            if (!widget.controls)
+            if (!widget.controls || widget.compassTop != null)
               Positioned(
                 right: 12,
-                top: widget.topInset + 12,
+                top: widget.compassTop ?? widget.topInset + 12,
                 child: AnimatedScale(
                   scale: _rotation.abs() > 0.01 ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 180),
@@ -264,7 +270,7 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                     // Shown while the plan is turned; tap to turn it north-up.
                     AnimatedSize(
                       duration: const Duration(milliseconds: 180),
-                      child: _rotation.abs() > 0.01
+                      child: _rotation.abs() > 0.01 && widget.compassTop == null
                           ? Padding(
                               padding: const EdgeInsets.only(bottom: 10),
                               child: _Compass(
