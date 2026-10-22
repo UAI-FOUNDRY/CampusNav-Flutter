@@ -88,8 +88,10 @@ class WifiGuess {
 /// scan with the fingerprints and can name the room and floor by itself.
 ///
 /// Fingerprints are kept on the phone and shared through the backend
-/// (`/api/wifi`), so everyone's confirmations help everyone. Only access
-/// point ids and signal strengths are stored, never who or when exactly.
+/// (`/api/wifi`), so confirmations can help other users. A shared sample
+/// contains the confirmed spot, floor, scan timestamp, and nearby access-point
+/// BSSIDs and signal strengths; it does not include an account or device ID.
+/// The spot and timestamp can still be location-sensitive.
 ///
 /// iPhones do not let apps scan Wi-Fi: there this is simply off.
 class WifiFingerprints {
