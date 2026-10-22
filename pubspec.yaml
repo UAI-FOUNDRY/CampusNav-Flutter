@@ -40,6 +40,8 @@ dependencies:
   geolocator: ^14.0.0 # "Use my location" in the start picker
   flutter_map: ^8.2.2
   latlong2: ^0.9.1
+  sensors_plus: ^7.1.1 # steps, turns and air pressure for live guidance
+  dchs_motion_sensors: ^3.0.0 # compass from the rotation sensor (Android) / Core Motion (iOS)
 
 dev_dependencies:
   flutter_test:

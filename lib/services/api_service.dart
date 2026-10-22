@@ -343,6 +343,7 @@ class ApiService {
     String? startName,
     double? startLat, // GPS: the server snaps it to the nearest campus path
     double? startLng,
+    int? startFloor, // with GPS: may snap to indoor dots of this floor too
   }) async {
     if (useMock) {
       await Future.delayed(const Duration(milliseconds: 800));
@@ -361,6 +362,7 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/api/route').replace(queryParameters: {
       if (gps) 'from_lat': startLat.toString() else 'from': start,
       if (gps) 'from_lng': startLng.toString(),
+      if (gps && startFloor != null) 'from_floor': '$startFloor',
       'to': destination,
       if (stepFree) 'accessible': '1',
     });

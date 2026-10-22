@@ -4,7 +4,17 @@
     <!-- "Use my location" as the start of a route (only while the app is open). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Wi-Fi fingerprints: which networks are around tells the room and floor
+         indoors ("Use my location"). Scanning needs the location permission too. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <!-- Used when present; phones without them still install the app. -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
+    <uses-feature android:name="android.hardware.wifi" android:required="false"/>
+    <uses-feature android:name="android.hardware.sensor.barometer" android:required="false"/>
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false"/>
+    <uses-feature android:name="android.hardware.sensor.compass" android:required="false"/>
     <application
         android:label="campus_navigation"
         android:usesCleartextTraffic="true"

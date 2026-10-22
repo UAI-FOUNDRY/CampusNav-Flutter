@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/route.dart';
+import '../services/live_guide.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
 import 'person_marker.dart';
@@ -92,6 +94,10 @@ class LiveFloorPlan extends StatelessWidget {
   /// grey. Null draws the plain route.
   final MapPoint? person;
 
+  /// Live guidance: where you are, every frame (replaces [person]). The
+  /// icon moves along the route continuously and shows the compass beam.
+  final ValueListenable<LivePose?>? live;
+
   const LiveFloorPlan({
     super.key,
     required this.image,
@@ -101,9 +107,30 @@ class LiveFloorPlan extends StatelessWidget {
     this.color = AppColors.academic,
     this.pins = const [],
     this.person,
+    this.live,
     this.zoom = 1,
     this.rotation = 0,
   });
+
+  /// [pts] split where [me] is (on the nearest piece of the line):
+  /// (walked part, part ahead, index of the last point already passed).
+  static (List<MapPoint>, List<MapPoint>, int) _splitAt(List<MapPoint> pts, MapPoint me) {
+    var best = 0;
+    var bestD = double.infinity;
+    for (var i = 0; i + 1 < pts.length; i++) {
+      final a = pts[i], b = pts[i + 1];
+      final dx = b.x - a.x, dy = b.y - a.y;
+      final l2 = dx * dx + dy * dy;
+      final t = l2 == 0 ? 0.0 : (((me.x - a.x) * dx + (me.y - a.y) * dy) / l2).clamp(0.0, 1.0).toDouble();
+      final cx = a.x + t * dx, cy = a.y + t * dy;
+      final d = (me.x - cx) * (me.x - cx) + (me.y - cy) * (me.y - cy);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return ([...pts.sublist(0, best + 1), me], [me, ...pts.sublist(best + 1)], best);
+  }
 
   // Sizes on screen at 1x zoom.
   static const _line = 4.5;
@@ -178,6 +205,63 @@ class LiveFloorPlan extends StatelessWidget {
             );
 
         final marker = PersonMarker(color: color, size: 26);
+        final live = this.live;
+
+        // Live guidance: the walked / ahead split and the icon change every
+        // frame, so only they are rebuilt (not the picture and the pins).
+        Widget liveLine() => ValueListenableBuilder<LivePose?>(
+              valueListenable: live!,
+              builder: (context, pose, _) {
+                final at = pose?.plan;
+                if (at == null || points.length < 2) {
+                  return CustomPaint(painter: painter(points, color, stopFlags: stops));
+                }
+                final (gone, next, idx) = _splitAt(points, at);
+                return Stack(
+                  children: [
+                    Positioned.fill(child: CustomPaint(painter: painter(gone, Colors.grey.shade500))),
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: painter(next, color, stopFlags: [false, ...stops.sublist(idx + 1)]),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+
+        Widget liveMarker() => ValueListenableBuilder<LivePose?>(
+              valueListenable: live!,
+              builder: (context, pose, _) {
+                final at = pose?.plan;
+                if (pose == null || at == null) return const SizedBox.shrink();
+                final f = pose.planFacing;
+                final icon = PersonMarker(
+                  color: pose.offRoute ? AppColors.sportsInk : color,
+                  size: 26,
+                  facing: f == null ? null : f + rotation,
+                );
+                final box = f == null ? icon.outerSize : icon.beamSize;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: at.x * s - box / 2,
+                      top: at.y * s - box / 2,
+                      width: box,
+                      height: box,
+                      child: Semantics(
+                        label: 'You are here',
+                        child: Transform.rotate(
+                          angle: -rotation,
+                          child: Transform.scale(scale: k, child: icon),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
         // "Reduce motion" in the phone's settings: no drawing / gliding.
         final still = MediaQuery.of(context).disableAnimations;
         // Names once the plan is drawn at least 1.5 screen px per picture px.
@@ -206,15 +290,17 @@ class LiveFloorPlan extends StatelessWidget {
                 ),
               ),
             ),
-            if (walked.length > 1)
+            if (live != null)
+              Positioned.fill(child: liveLine()),
+            if (live == null && walked.length > 1)
               Positioned.fill(
                 child: CustomPaint(painter: painter(walked, Colors.grey.shade500)),
               ),
-            if (me != null && ahead.length > 1)
+            if (live == null && me != null && ahead.length > 1)
               Positioned.fill(
                 child: CustomPaint(painter: painter(ahead, color, stopFlags: aheadStops)),
               ),
-            if (me == null && points.length > 1)
+            if (live == null && me == null && points.length > 1)
               Positioned.fill(
                 child: Semantics(
                   label: 'Route on this floor from ${route.first.name.isEmpty ? 'the start' : route.first.name} '
@@ -235,7 +321,7 @@ class LiveFloorPlan extends StatelessWidget {
             for (final pin in pins)
               if (pin.selected) ..._pinWidgets(pin, s, k, true, true),
             // Start: a small dark dot.
-            if (me == null && points.isNotEmpty)
+            if (live == null && me == null && points.isNotEmpty)
               _at(
                 points.first.x * s,
                 points.first.y * s,
@@ -264,8 +350,10 @@ class LiveFloorPlan extends StatelessWidget {
                   shadows: const [Shadow(color: Colors.white, blurRadius: 4)],
                 ),
               ),
+            // You are here, live: follows you frame by frame.
+            if (live != null) Positioned.fill(child: liveMarker()),
             // You are here: slides smoothly from one step to the next.
-            if (me != null)
+            if (live == null && me != null)
               AnimatedPositioned(
                 duration: Duration(milliseconds: still ? 0 : 1000),
                 curve: Curves.easeInOut,

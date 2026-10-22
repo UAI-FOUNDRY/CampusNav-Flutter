@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -7,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/destination.dart';
 import '../models/route.dart';
+import '../services/live_guide.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
 import 'person_marker.dart';
@@ -67,6 +69,12 @@ class LiveCampusMap extends StatefulWidget {
   /// the icon and the map move continuously.
   final bool smoothLive;
 
+  /// Live guidance: where you are, updated every frame (GPS, steps and
+  /// turns together, see LiveGuide). When given, it replaces [person] and
+  /// the glide: the icon and the camera follow it frame by frame, with the
+  /// compass beam and the accuracy halo.
+  final ValueListenable<LivePose?>? live;
+
   /// Where to look when there is no route to fit (Universal AI University).
   static const campus = LatLng(18.9027, 73.3742);
 
@@ -85,6 +93,7 @@ class LiveCampusMap extends StatefulWidget {
     this.topInset = 0,
     this.glide = const Duration(milliseconds: 1400),
     this.smoothLive = false,
+    this.live,
   });
 
   @override
@@ -121,6 +130,12 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   LatLng? _me; // where the person icon is drawn right now
   List<LatLng> _glide = const []; // the points it is walking along
 
+  // Live guidance: the compass (degrees, null = unknown), how sure the
+  // position is (metres) and whether GPS says you left the path.
+  double? _facing;
+  double _accuracy = 0;
+  bool _offRoute = false;
+
   List<LatLng> get _line =>
       [for (final p in widget.route) LatLng(p.lat, p.lng)];
 
@@ -132,18 +147,41 @@ class _LiveCampusMapState extends State<LiveCampusMap>
       duration: const Duration(milliseconds: 1400),
     )..addListener(_tick);
 
+    final pose = widget.live?.value;
     final person = widget.person;
-    if (person != null) {
+    if (pose != null) {
+      _takePose(pose);
+    } else if (person != null) {
       _me = LatLng(person.lat, person.lng);
     } else if (_line.isNotEmpty) {
       _me = _line.first;
     }
-    if (widget.follow) _frames = createTicker(_onFrame)..start();
+    if (widget.follow || widget.live != null) _frames = createTicker(_onFrame)..start();
+  }
+
+  /// Copies a live pose into what is drawn; true when something visible changed.
+  bool _takePose(LivePose pose) {
+    final me = LatLng(pose.geo.lat, pose.geo.lng);
+    final old = _me;
+    final moved = old == null || _dist.distance(old, me) > 0.03;
+    final f = pose.heading, f0 = _facing;
+    final turned = (f == null) != (f0 == null) || (f != null && f0 != null && _wrap180(f - f0).abs() > 1);
+    final other = (pose.accuracy - _accuracy).abs() > 0.5 || pose.offRoute != _offRoute;
+    if (!moved && !turned && !other) return false;
+    _me = me;
+    _facing = f;
+    _accuracy = pose.accuracy;
+    _offRoute = pose.offRoute;
+    return true;
   }
 
   @override
   void didUpdateWidget(LiveCampusMap old) {
     super.didUpdateWidget(old);
+    if (widget.live != null) {
+      if (_frames == null) _frames = createTicker(_onFrame)..start();
+      return; // the live pose drives the icon, frame by frame
+    }
     final now = widget.person;
     final before = old.person;
     if (now == null) return;
@@ -188,6 +226,8 @@ class _LiveCampusMapState extends State<LiveCampusMap>
   void _onFrame(Duration elapsed) {
     final dt = ((elapsed - _lastFrame).inMicroseconds / 1e6).clamp(0.0, 0.1).toDouble();
     _lastFrame = elapsed;
+    final pose = widget.live?.value;
+    if (pose != null && _takePose(pose)) setState(() {});
     _driveCamera(dt);
   }
 
@@ -524,6 +564,20 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                         ),
                     ],
                   ),
+                // How sure the position is: a soft circle while it is rough.
+                if (widget.live != null && me != null && _accuracy >= 8)
+                  CircleLayer(
+                    circles: [
+                      CircleMarker(
+                        point: me,
+                        radius: _accuracy,
+                        useRadiusInMeter: true,
+                        color: widget.color.withValues(alpha: 0.10),
+                        borderColor: widget.color.withValues(alpha: 0.35),
+                        borderStrokeWidth: 1,
+                      ),
+                    ],
+                  ),
                 if (line.length > 1 || me != null)
                   MarkerLayer(
                     rotate: true,
@@ -537,13 +591,18 @@ class _LiveCampusMapState extends State<LiveCampusMap>
                           alignment: Alignment.topCenter,
                           child: Icon(Icons.location_on, size: 38, color: widget.color),
                         ),
-                      // Where you are (drawn last, so it is on top).
+                      // Where you are (drawn last, so it is on top), with
+                      // a beam the way the phone points.
                       if (me != null)
                         Marker(
                           point: me,
-                          width: 58,
-                          height: 58,
-                          child: PersonMarker(color: widget.color, size: 36),
+                          width: 96,
+                          height: 96,
+                          child: PersonMarker(
+                            color: _offRoute ? AppColors.sportsInk : widget.color,
+                            size: 36,
+                            facing: _facing == null ? null : (_facing! + _rotation) * math.pi / 180,
+                          ),
                         ),
                     ],
                   ),

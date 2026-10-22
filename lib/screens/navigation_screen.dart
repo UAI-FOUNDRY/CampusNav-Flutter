@@ -2,15 +2,16 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart' show Position;
 import '../data/mock_campus.dart';
 import '../models/destination.dart';
 import '../models/route.dart';
 import '../models/start_point.dart';
 import '../services/api_service.dart';
+import '../services/live_guide.dart';
 import '../services/location_service.dart';
-import '../services/route_tracker.dart';
+import '../services/spot_locator.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
@@ -26,6 +27,7 @@ import '../widgets/pill.dart';
 import '../widgets/report_sheet.dart';
 import '../widgets/route_strip.dart';
 import '../widgets/segment_toggle.dart';
+import '../widgets/sensor_sheet.dart';
 import '../widgets/start_location_sheet.dart';
 import '../widgets/state_views.dart';
 import 'route_map_screen.dart';
@@ -48,7 +50,8 @@ class NavigationScreen extends StatefulWidget {
   State<NavigationScreen> createState() => _NavigationScreenState();
 }
 
-class _NavigationScreenState extends State<NavigationScreen> {
+class _NavigationScreenState extends State<NavigationScreen>
+    with SingleTickerProviderStateMixin {
   final _api = const ApiService();
 
   // Where the user was when they opened this screen.
@@ -80,19 +83,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _arrived = false;
   int _stepIndex = 0;
 
-  // ---- live GPS guidance (outside) ----
-  // Outside, the phone's GPS moves the person icon along the path, moves on
-  // to the next step by itself and finds a new route if you go off the path.
-  // Inside (GPS is not good enough there) you tap Next or scan a sign.
-  StreamSubscription<Position>? _gps;
-  _Gps _gpsState = _Gps.off;
-  LocateResult? _gpsProblem;
-  RouteGeometry? _geometry;
-  GeoPoint? _livePos; // where the person icon is (moved onto the path)
-  double? _liveStepLeft; // metres to the end of the current step
-  double? _gpsAccuracy;
-  int _offRouteFixes = 0;
-  double? _lastAlong; // metres along the path at the last fix
+  // ---- live guidance ----
+  // GPS outside, steps + turns inside, the barometer for floors, the compass
+  // for which way you face (see LiveGuide). It moves the person icon every
+  // frame, moves on to the next step by itself, closes the stairs / lift
+  // card when you reach the floor and finds a new route if you go off the
+  // path. Without it (demo data) you tap Next as you go.
+  LiveGuide? _guide;
+  Ticker? _frames;
   bool _rerouting = false;
   DateTime? _lastReroute;
 
@@ -112,7 +110,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   void dispose() {
     AppState.startPoint.removeListener(_onStartChanged);
-    _gps?.cancel(); // stop GPS when the screen closes
+    _stopLive(); // sensors and GPS off when the screen closes
+    _frames?.dispose();
     super.dispose();
   }
 
@@ -223,10 +222,89 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _guiding = true;
       _stepIndex = math.min(1, route.steps.length - 1); // step 0 is "you are here"
     });
-    _startTracking();
+    _startLive(route);
+  }
+
+  /// Every point of the route has a GPS position (older backends did not
+  /// send them for the floor plans): then it can be followed live.
+  static bool _canFollow(NavigationRoute route) =>
+      route.legs.isNotEmpty &&
+      route.legs.every((l) =>
+          !l.isIndoor || (l.points.isNotEmpty && l.points.every((p) => p.lat != null && p.lng != null)));
+
+  /// Live guidance with every sensor (real backend routes).
+  void _startLive(NavigationRoute route) {
+    _stopLive();
+    if (ApiService.useMock || !_canFollow(route)) return;
+    // A start picked from the list or scanned from a sign is exact: its
+    // floor is certain (a GPS start is not).
+    final guide = LiveGuide(route: route, startFloorKnown: !_start.live);
+    if (!guide.geometry.usable) {
+      guide.dispose();
+      return;
+    }
+    guide.addListener(_onGuide);
+    _guide = guide;
+    final frames = _frames ??= createTicker((_) => _guide?.frame());
+    if (!frames.isActive) frames.start();
+    guide.start();
+  }
+
+  void _stopLive() {
+    if (_frames?.isActive ?? false) _frames!.stop();
+    final g = _guide;
+    _guide = null;
+    if (g != null) {
+      g.removeListener(_onGuide);
+      g.dispose(); // stops GPS and sensors
+    }
+  }
+
+  /// Something live guidance shows has changed (step, metres, floor card ...).
+  void _onGuide() {
+    final g = _guide;
+    if (g == null || !mounted) return;
+    final notice = g.takeNotice();
+    if (notice != null) {
+      HapticFeedback.heavyImpact();
+      _toast(notice);
+    }
+    final from = g.rerouteRequest;
+    if (from != null) {
+      _rerouteFrom(from.latitude, from.longitude, accuracy: from.accuracy);
+    }
+    if (g.arrived && !_arrived) {
+      HapticFeedback.heavyImpact();
+      unawaited(SpotLocator.rememberSpot(widget.destination.id));
+      setState(() => _arrived = true);
+      // Not inside the guide's own notification: stop it right after.
+      Future.microtask(_stopLive);
+      return;
+    }
+    final k = g.stepIndex;
+    if (k > _stepIndex) HapticFeedback.mediumImpact();
+    setState(() {
+      _stepIndex = k;
+      _floorPrompt = null;
+    });
   }
 
   void _next(NavigationRoute route) {
+    final g = _guide;
+    if (g != null) {
+      // Live: Next jumps ahead (the sensors carry on from there).
+      if (g.wait != null) {
+        HapticFeedback.selectionClick();
+        g.confirmFloor();
+      } else if (_stepIndex >= route.steps.length - 1) {
+        HapticFeedback.mediumImpact();
+        g.markArrived();
+      } else {
+        HapticFeedback.selectionClick();
+        g.jumpToStep(_stepIndex + 1);
+      }
+      return;
+    }
     // Confirming the stairs/lift card moves on to the new floor.
     if (_floorPrompt != null) {
       HapticFeedback.selectionClick();
@@ -266,6 +344,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _previous() {
+    final g = _guide;
+    if (g != null) {
+      if (_stepIndex > 1) {
+        HapticFeedback.selectionClick();
+        g.jumpToStep(_stepIndex - 1);
+      }
+      return;
+    }
     if (_floorPrompt != null) {
       setState(() => _floorPrompt = null);
       return;
@@ -277,7 +363,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _endGuidance() {
-    _stopTracking();
+    _stopLive();
     setState(() {
       _floorPrompt = null;
       _guiding = false;
@@ -285,154 +371,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
     });
   }
 
-  // ---------------------------------------------------------- live GPS
+  // ---------------------------------------------------------- live helpers
 
-  static const _arriveRadius = 10.0; // metres: "you have reached the turn"
-
-  bool _stepIsInside(NavigationRoute route) =>
-      route.steps[_stepIndex].space == 'indoor';
-
-  Future<void> _startTracking() async {
-    final route = _route;
-    if (ApiService.useMock || route == null || !_guiding) return;
-    if (route.outdoorPolyline.length < 2 || _stepIsInside(route)) {
-      setState(() => _gpsState = _Gps.inside);
-      return;
-    }
-    setState(() {
-      _gpsState = _Gps.starting;
-      _gpsProblem = null;
-    });
-    final problem = await LocationService.permissionProblem();
-    if (!mounted || !_guiding) return;
-    if (problem != null) {
-      setState(() {
-        _gpsState = _Gps.blocked;
-        _gpsProblem = problem;
-      });
-      return;
-    }
-    _geometry = RouteGeometry(route.outdoorPolyline, route.steps);
-    await _gps?.cancel();
-    _gps = LocationService.follow().listen(
-      _onFix,
-      onError: (Object _) {
-        if (mounted) setState(() => _gpsState = _Gps.weak);
-      },
-    );
-  }
-
-  void _stopTracking({_Gps state = _Gps.off}) {
-    _gps?.cancel();
-    _gps = null;
-    _offRouteFixes = 0;
-    _lastAlong = null;
-    if (!mounted) return;
-    setState(() {
-      _livePos = null;
-      _liveStepLeft = null;
-      _gpsState = state;
-    });
-  }
-
-  /// After a step was changed by hand (Next, Back, a scanned sign): GPS on
-  /// for outside steps, off inside.
-  void _syncTracking() {
-    final route = _route;
-    if (route == null || !_guiding || _arrived || ApiService.useMock) return;
-    if (_stepIsInside(route)) {
-      if (_gps != null || _gpsState != _Gps.inside) _stopTracking(state: _Gps.inside);
-    } else if (_gps == null &&
-        _gpsState != _Gps.paused &&
-        _gpsState != _Gps.blocked &&
-        _gpsState != _Gps.starting) {
-      _startTracking();
-    }
-  }
-
-  void _onFix(Position p) {
-    final route = _route;
-    final geo = _geometry;
-    if (!mounted || route == null || geo == null || !_guiding || _arrived) return;
-    if (_stepIsInside(route)) {
-      _stopTracking(state: _Gps.inside);
-      return;
-    }
-    final acc = p.accuracy;
-    _gpsAccuracy = acc;
-    if (acc > 50) {
-      // Too rough to place you on a path: wait for a better fix.
-      setState(() => _gpsState = _Gps.weak);
-      return;
-    }
-
-    // Never look behind the current step (a path passing close to itself).
-    final from = math.max(0.0, (geo.stepAlong[_stepIndex] ?? 0) - 20);
-    final fix = geo.project(p.latitude, p.longitude, minAlong: from);
-
-    // Off the path for three fixes in a row: a new route from here.
-    if (fix.off > math.max(25.0, acc * 1.2)) {
-      _offRouteFixes++;
-      setState(() {
-        _gpsState = _Gps.live;
-        _livePos = GeoPoint(p.latitude, p.longitude);
-      });
-      if (_offRouteFixes >= 3) _reroute(p);
-      return;
-    }
-    _offRouteFixes = 0;
-
-    // GPS wobbles: a fix a few metres *behind* the last one is noise, not you
-    // walking back. Keep the icon where it was instead of stepping back.
-    var along = fix.along;
-    var point = fix.point;
-    final last = _lastAlong;
-    final prev = _livePos;
-    if (last != null && prev != null && along < last && last - along < 8) {
-      along = last;
-      point = prev;
-    }
-    _lastAlong = along;
-
-    // Walked past the start of the next step(s)? Move on, like Google Maps.
-    final radius = math.max(6.0, math.min(acc, 15.0));
-    var i = _stepIndex;
-    while (i + 1 < route.steps.length) {
-      final next = route.steps[i + 1];
-      if (next.space == 'indoor') break; // going inside is confirmed by hand
-      final at = geo.stepAlong[i + 1];
-      if (at == null || along < at - radius) break;
-      i++;
-    }
-    final hasNext = i + 1 < route.steps.length;
-    final nextAt = hasNext && route.steps[i + 1].space != 'indoor'
-        ? geo.stepAlong[i + 1]
-        : geo.length;
-    if (i != _stepIndex) HapticFeedback.mediumImpact();
-    setState(() {
-      _gpsState = _Gps.live;
-      _livePos = point;
-      _liveStepLeft = nextAt == null ? null : math.max(0.0, nextAt - along);
-      _stepIndex = i;
-    });
-
-    final atEnd = along >= geo.length - radius;
-    if (atEnd && i >= route.steps.length - 1) {
-      // An outdoor destination: arrived.
-      HapticFeedback.heavyImpact();
-      _stopTracking();
-      setState(() => _arrived = true);
-    } else if (atEnd && hasNext && route.steps[i + 1].space == 'indoor') {
-      // At the building door: GPS is no use inside.
-      HapticFeedback.mediumImpact();
-      _stopTracking(state: _Gps.door);
-    }
-  }
-
-  Future<void> _reroute(Position p) async {
+  /// A new route from a position (off the path outside, or on another floor
+  /// inside with [floor]).
+  Future<void> _rerouteFrom(double lat, double lng, {double accuracy = 10, int? floor}) async {
+    final g = _guide;
     final last = _lastReroute;
+    if (g == null) return;
     if (_rerouting ||
         (last != null && DateTime.now().difference(last) < const Duration(seconds: 15))) {
+      if (!_rerouting) g.rerouteHandled();
       return;
     }
     setState(() {
@@ -445,26 +394,25 @@ class _NavigationScreenState extends State<NavigationScreen> {
         destination: widget.destination.id,
         stepFree: _stepFree,
         startName: 'Your location',
-        startLat: p.latitude,
-        startLng: p.longitude,
+        startLat: lat,
+        startLng: lng,
+        startFloor: floor,
       );
-      if (!mounted || !_guiding) return;
+      if (!mounted || !_guiding || _guide != g) return;
       HapticFeedback.mediumImpact();
       setState(() {
         _route = route;
         _stepIndex = math.min(1, route.steps.length - 1);
         _floorPrompt = null;
-        _offRouteFixes = 0;
-        _lastAlong = null;
-        _livePos = null;
-        _liveStepLeft = null;
       });
-      _geometry = route.outdoorPolyline.length > 1
-          ? RouteGeometry(route.outdoorPolyline, route.steps)
-          : null;
+      if (_canFollow(route)) {
+        g.replaceRoute(route, sigma: accuracy.clamp(3.0, 15.0).toDouble());
+      } else {
+        _stopLive();
+      }
       _toast('New route from where you are');
-      if (_geometry == null) _stopTracking(state: _Gps.inside);
     } on ApiException catch (e) {
+      g.rerouteHandled();
       if (mounted) {
         _toast(e.kind == ApiErrorKind.offCampus
             ? 'You are off the campus paths. Head back towards the route.'
@@ -475,8 +423,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
-  /// Inside: scan the QR code on a sign to jump to that point of the route
-  /// (or get a new route from there if it is not on this one).
+  /// Scan the QR code on a sign to jump to that point of the route (or get
+  /// a new route from there if it is not on this one).
   Future<void> _scanSign() async {
     final route = _route;
     if (route == null) return;
@@ -495,12 +443,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
     if (idx >= 1) {
       HapticFeedback.mediumImpact();
+      _guide?.jumpToStep(idx, fromSign: true);
       setState(() {
         _floorPrompt = null;
-        _liveStepLeft = null;
         _stepIndex = idx;
       });
-      _syncTracking();
       return;
     }
     try {
@@ -515,11 +462,15 @@ class _NavigationScreenState extends State<NavigationScreen> {
         _route = fresh;
         _start = here;
         _floorPrompt = null;
-        _liveStepLeft = null;
         _stepIndex = math.min(1, fresh.steps.length - 1);
       });
+      final g = _guide;
+      if (g != null && _canFollow(fresh)) {
+        g.replaceRoute(fresh, sigma: 1.5);
+      } else {
+        _startLive(fresh);
+      }
       _toast('New route from ${here.name}');
-      _syncTracking();
     } on ApiException catch (e) {
       if (mounted) _toast(e.message);
     }
@@ -531,11 +482,72 @@ class _NavigationScreenState extends State<NavigationScreen> {
       ..showSnackBar(SnackBar(behavior: SnackBarBehavior.floating, content: Text(message)));
   }
 
-  /// The GPS button and the line above the buttons: what guidance is doing
-  /// now, and what tapping the button does.
+  void _openSensors() {
+    final g = _guide;
+    if (g == null) return;
+    showSensorSheet(context, guide: g);
+  }
+
+  /// The round button next to Next: sensors, scan a sign, or pause.
+  Future<void> _guideMenu(LiveGuide g) async {
+    HapticFeedback.selectionClick();
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        final text = Theme.of(context).textTheme;
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    'Auto-follow is on: the arrow and the metres move by themselves as you walk.',
+                    style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tune),
+                  title: const Text('Sensors and status'),
+                  onTap: () => Navigator.of(context).pop('sensors'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.qr_code_scanner),
+                  title: const Text('Scan a sign to jump there'),
+                  onTap: () => Navigator.of(context).pop('scan'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.pause_circle_outline),
+                  title: const Text('Pause auto-follow'),
+                  subtitle: const Text('Then you move on with Next'),
+                  onTap: () => Navigator.of(context).pop('pause'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted) return;
+    switch (choice) {
+      case 'sensors':
+        _openSensors();
+      case 'scan':
+        unawaited(_scanSign());
+      case 'pause':
+        g.setPaused(true);
+        _toast('Auto-follow paused. Tap the round button to follow you again.');
+    }
+  }
+
+  /// The status line above the buttons and the round button next to Next:
+  /// what is following you now, and what tapping the button does.
   ({IconData icon, String status, String tip, Color color, VoidCallback onTap}) _gpsLook() {
-    final acc = _gpsAccuracy;
-    final pm = acc == null ? '' : ' · ±${acc.round()} m';
+    final g = _guide;
     if (_rerouting) {
       return (
         icon: Icons.alt_route,
@@ -545,80 +557,108 @@ class _NavigationScreenState extends State<NavigationScreen> {
         onTap: () {},
       );
     }
-    void pause() => _stopTracking(state: _Gps.paused);
-    return switch (_gpsState) {
-      _Gps.live => (
+    if (g == null) {
+      return (
+        icon: Icons.qr_code_scanner,
+        status: 'Tap Next as you go, or scan a sign to jump there',
+        tip: 'Scan a sign',
+        color: AppColors.inkMuted,
+        onTap: _scanSign,
+      );
+    }
+    final acc = g.lastFix?.accuracy;
+    final pm = acc == null ? '' : ' · ±${acc.round()} m';
+    final pose = g.pose.value;
+    final inside = pose?.indoor ?? false;
+    final floor = pose == null ? '' : ' · ${floorLabel(pose.floor).toLowerCase()}';
+    final problem = g.gpsProblem;
+    // Pausing makes you tap Next for every step, so it is never one tap
+    // away: the button opens a small menu (pause is one of its choices).
+    void pause() => _guideMenu(g);
+
+    if (problem != null && !inside && g.mode != GuideMode.paused && g.mode != GuideMode.simulated) {
+      return (
+        icon: Icons.location_disabled,
+        status: problem.problem == LocateProblem.serviceOff
+            ? 'Location is off: following your steps only. Tap to turn it on'
+            : 'No location access: following your steps only',
+        tip: 'Turn on location',
+        color: AppColors.danger,
+        onTap: () async {
+          if (problem.problem == LocateProblem.serviceOff) {
+            await LocationService.openLocationSettings();
+          } else if (problem.problem == LocateProblem.deniedForever) {
+            await LocationService.openAppSettings();
+          }
+          await g.retryGps();
+        },
+      );
+    }
+    return switch (g.mode) {
+      GuideMode.gps => (
           icon: Icons.gps_fixed,
-          status: 'Following you by GPS$pm',
-          tip: 'Pause auto-follow',
+          status: 'Following you by GPS and your steps$pm',
+          tip: 'Guidance options',
           color: AppColors.success,
           onTap: pause,
         ),
-      _Gps.starting => (
-          icon: Icons.gps_not_fixed,
-          status: 'Finding your position…',
-          tip: 'Pause auto-follow',
-          color: AppColors.sportsInk,
+      GuideMode.steps => (
+          icon: Icons.directions_walk,
+          status: inside
+              ? 'Inside: following your steps and turns$floor'
+              : 'GPS is weak here: following your steps$pm',
+          tip: 'Guidance options',
+          color: AppColors.success,
           onTap: pause,
         ),
-      _Gps.weak => (
-          icon: Icons.gps_not_fixed,
-          status: 'GPS is weak here$pm: tap Next as you go',
-          tip: 'Pause auto-follow',
-          color: AppColors.sportsInk,
+      GuideMode.floorChange => (
+          icon: Icons.stairs_outlined,
+          status: switch (g.floorSensing) {
+            'barometer' => 'The floor is detected by the barometer as you go',
+            'steps' => 'Your steps on the stairs are counted: it moves on by itself at the top',
+            'motion' => 'The lift is felt starting and stopping: it moves on by itself',
+            _ => 'Tap the button once you are on the new floor',
+          },
+          tip: 'Guidance options',
+          color: AppColors.success,
           onTap: pause,
         ),
-      _Gps.paused || _Gps.off => (
+      GuideMode.manual => (
+          icon: Icons.qr_code_scanner,
+          status: 'This phone has no step sensor: tap Next as you go, or scan a sign',
+          tip: 'Scan a sign',
+          color: AppColors.inkMuted,
+          onTap: _scanSign,
+        ),
+      GuideMode.paused => (
           icon: Icons.gps_off,
           status: 'Auto-follow is off: tap Next as you go',
-          tip: 'Follow me by GPS',
+          tip: 'Follow me again',
           color: AppColors.inkMuted,
-          onTap: () {
-            setState(() => _gpsState = _Gps.off);
-            _startTracking();
-          },
+          onTap: () => g.setPaused(false),
         ),
-      _Gps.blocked => (
-          icon: Icons.location_disabled,
-          status: _gpsProblem?.problem == LocateProblem.serviceOff
-              ? 'Location is off: turn it on to be followed, or tap Next'
-              : 'No location access: tap Next as you go',
-          tip: 'Turn on location',
-          color: AppColors.danger,
-          onTap: () async {
-            final problem = _gpsProblem?.problem;
-            if (problem == LocateProblem.serviceOff) {
-              await LocationService.openLocationSettings();
-            } else if (problem == LocateProblem.deniedForever) {
-              await LocationService.openAppSettings();
-            } else {
-              setState(() => _gpsState = _Gps.off);
-              _startTracking();
-            }
-          },
+      GuideMode.simulated => (
+          icon: Icons.smart_toy_outlined,
+          status: 'Simulating the walk for testing. Tap to stop',
+          tip: 'Stop the simulation',
+          color: AppColors.sportsInk,
+          onTap: () => g.setSimulating(false),
         ),
-      _Gps.door => (
-          icon: Icons.qr_code_scanner,
-          status: "You're at the entrance. Inside, tap Next as you go or scan a sign",
-          tip: 'Scan a sign',
-          color: AppColors.inkMuted,
-          onTap: _scanSign,
-        ),
-      _Gps.inside => (
-          icon: Icons.qr_code_scanner,
-          status: 'Inside: tap Next as you go, or scan a sign to jump there',
-          tip: 'Scan a sign',
-          color: AppColors.inkMuted,
-          onTap: _scanSign,
+      GuideMode.starting => (
+          icon: Icons.gps_not_fixed,
+          status: 'Starting GPS and sensors…',
+          tip: 'Guidance options',
+          color: AppColors.sportsInk,
+          onTap: pause,
         ),
     };
   }
 
   double _remainingMeters(NavigationRoute route) {
-    // Live: what is left of this step, plus every step after it.
-    final live = _liveStepLeft;
-    var sum = live ?? 0.0;
-    for (var i = live == null ? _stepIndex : _stepIndex + 1; i < route.steps.length; i++) {
+    final g = _guide;
+    if (g != null) return g.remaining;
+    var sum = 0.0;
+    for (var i = _stepIndex; i < route.steps.length; i++) {
       sum += route.steps[i].distance ?? 0;
     }
     return sum;
@@ -949,6 +989,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Widget _liveGuidance(NavigationRoute route) {
     final step = route.steps[_stepIndex];
     final top = MediaQuery.of(context).padding.top;
+    final g = _guide;
+    final wait = g?.wait;
+    // Live: the stairs / lift card comes from where you are (and closes by
+    // itself when the barometer sees you reach the floor).
+    final prompt = g == null
+        ? _floorPrompt
+        : wait == null
+            ? null
+            : _FloorPrompt(from: wait.from, to: wait.to, via: wait.via);
+    final mismatch = g?.floorMismatch;
+    final turn = g?.turnToRoute;
 
     return Column(
       children: [
@@ -999,24 +1050,50 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     line: _line,
                     index: _stepIndex,
                     total: route.steps.length - 1,
-                    metresLeft: _liveStepLeft,
+                    metresLeft: g?.metresToNext,
                   ),
                 ),
               ),
+              // The barometer says you went up/down somewhere else.
+              if (mismatch != null && prompt == null)
+                Positioned(
+                  top: top + 128,
+                  left: 12,
+                  right: 12,
+                  child: _WrongFloorBanner(
+                    floor: mismatch,
+                    routeFloor: g?.pose.value?.floor ?? (step.floor ?? 0),
+                    onReroute: () {
+                      final pose = g?.pose.value;
+                      if (pose == null) return;
+                      _rerouteFrom(pose.geo.lat, pose.geo.lng, floor: mismatch);
+                    },
+                    onDismiss: () => g?.dismissMismatch(),
+                  ),
+                ),
+              // Standing still facing away from the route: which way to turn.
+              if (turn != null && turn.abs() >= 60 && prompt == null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 18,
+                  child: Center(child: _TurnHint(angle: turn)),
+                ),
               // The stairs / lift moment covers the map until confirmed.
               Positioned.fill(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 260),
-                  child: _floorPrompt == null
+                  child: prompt == null
                       ? const SizedBox.shrink()
                       : _FloorChangeCard(
-                          key: ValueKey('${_floorPrompt!.from}-${_floorPrompt!.to}'),
-                          prompt: _floorPrompt!,
+                          key: ValueKey('${prompt.from}-${prompt.to}'),
+                          prompt: prompt,
                           color: _line,
-                          onConfirm: () {
-                            _next(route);
-                            _syncTracking();
-                          },
+                          progress: wait?.progress,
+                          automatic: wait?.automatic ?? false,
+                          sensing: g?.floorSensing,
+                          onScan: _scanSign,
+                          onConfirm: () => _next(route),
                           onBack: _previous,
                         ),
                 ),
@@ -1029,42 +1106,42 @@ class _NavigationScreenState extends State<NavigationScreen> {
     );
   }
 
-  /// The outdoor map while the current step is outside, the floor plan once
-  /// it is inside. The person icon sits at the start of the current step and
-  /// moves as you go to the next one.
+  /// The outdoor map while you are outside, the floor plan of your floor
+  /// once you are inside. Live, the person icon follows you every frame;
+  /// otherwise it sits at the start of the current step.
   Widget _guidanceMap(NavigationRoute route, RouteStep step) {
-    final inside = step.space == 'indoor';
+    final g = _guide;
+    final pose = g?.pose.value;
+    final inside = pose?.indoor ?? step.space == 'indoor';
+    final floor = pose?.floor ?? step.floor ?? 0;
 
     Widget child = const SizedBox.shrink();
     var key = 'outside';
 
     if (!inside) {
-      // Live GPS position when following you, else the start of the step.
-      final here = _livePos ??
-          ((step.lat != null && step.lng != null) ? GeoPoint(step.lat!, step.lng!) : null);
+      final lat = step.lat, lng = step.lng;
       child = LiveCampusMap(
         route: route.outdoorPolyline,
         color: _line,
-        person: here,
+        person: g == null && lat != null && lng != null ? GeoPoint(lat, lng) : null,
+        live: g?.pose,
         follow: true,
         // The way you are walking points up, like Google Maps navigation.
         headingUp: true,
         fill: true,
-        // GPS fixes arrive every second or two: glide quickly between them.
-        glide: Duration(milliseconds: _livePos != null ? 1000 : 1400),
-        smoothLive: _livePos != null,
       );
     } else {
       RouteLeg? found;
       for (final l in route.indoorLegs) {
-        if (l.floor == (step.floor ?? 0)) {
+        if (l.floor == floor) {
           found = l;
           break;
         }
       }
-      // final, so the null check below still holds inside the zoom builder.
+      // final, so the null check below still holds inside the builders.
       final leg = found;
-      if (leg != null && step.x != null && step.y != null) {
+      final px = step.x, py = step.y;
+      if (leg != null && (g != null || (px != null && py != null))) {
         key = 'inside-${leg.floor}';
         child = Stack(
           children: [
@@ -1077,7 +1154,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 imageHeight: leg.imageHeight,
                 route: leg.points,
                 color: _line,
-                person: MapPoint(step.x!, step.y!),
+                person: g == null && px != null && py != null ? MapPoint(px, py) : null,
+                live: g?.pose,
                 focus: routeFocus(leg.points, leg.imageWidth, leg.imageHeight),
               ),
             ),
@@ -1130,7 +1208,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
     final text = Theme.of(context).textTheme;
     final gps = _gpsLook();
     final remaining = _remainingMeters(route);
-    final progress = _stepIndex / (route.steps.length - 1);
+    final g = _guide;
+    final total = g == null ? 0.0 : g.geometry.length * g.geometry.scale;
+    final progress = g != null && total > 0
+        ? (1 - remaining / total).clamp(0.0, 1.0).toDouble()
+        : _stepIndex / (route.steps.length - 1);
     final atEnd = _stepIndex >= route.steps.length - 1;
     final bottom = MediaQuery.of(context).padding.bottom;
     final minutes = route.distance > 0
@@ -1208,22 +1290,33 @@ class _NavigationScreenState extends State<NavigationScreen> {
           if (!ApiService.useMock)
             Semantics(
               // Not a live region: the ± metres change with every GPS fix.
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(color: gps.color, shape: BoxShape.circle),
+              button: _guide != null,
+              hint: _guide != null ? 'Shows the sensors' : null,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: _guide == null ? null : _openSensors,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 32),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(color: gps.color, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          gps.status,
+                          maxLines: 2,
+                          style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                        ),
+                      ),
+                      if (_guide != null)
+                        const Icon(Icons.tune, size: 18, color: AppColors.inkMuted),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      gps.status,
-                      maxLines: 2,
-                      style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           const SizedBox(height: 12),
@@ -1231,11 +1324,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             children: [
               if (_stepIndex > 1) ...[
                 OutlinedButton(
-                  onPressed: () {
-                    _previous();
-                    _liveStepLeft = null;
-                    _syncTracking();
-                  },
+                  onPressed: _previous,
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(56, 56),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -1251,11 +1340,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     foregroundColor: readableOnLine(_line),
                     minimumSize: const Size(0, 56),
                   ),
-                  onPressed: () {
-                    _liveStepLeft = null;
-                    _next(route);
-                    _syncTracking();
-                  },
+                  onPressed: () => _next(route),
                   child: Text(atEnd ? "I've arrived" : 'Next step'),
                 ),
               ),
@@ -1558,7 +1643,7 @@ class _ArrivalView extends StatelessWidget {
     final text = Theme.of(context).textTheme;
 
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1614,12 +1699,29 @@ class _FloorChangeCard extends StatelessWidget {
   final VoidCallback onConfirm;
   final VoidCallback onBack;
 
+  /// Live guidance with a barometer: how much of the climb is done (0..1),
+  /// null before it starts.
+  final double? progress;
+
+  /// The card will close by itself on the new floor.
+  final bool automatic;
+
+  /// What notices the new floor: "barometer", "steps" or "motion".
+  final String? sensing;
+
+  /// Scan the QR sign at the landing (exact on any phone).
+  final VoidCallback? onScan;
+
   const _FloorChangeCard({
     super.key,
     required this.prompt,
     required this.color,
     required this.onConfirm,
     required this.onBack,
+    this.progress,
+    this.automatic = false,
+    this.sensing,
+    this.onScan,
   });
 
   @override
@@ -1633,83 +1735,272 @@ class _FloorChangeCard extends StatelessWidget {
     final way = prompt.up ? 'up' : 'down';
     final still = MediaQuery.of(context).disableAnimations;
 
+    final sensingText = switch (sensing) {
+      'steps' => 'Your steps on the stairs are counted: guidance goes on by itself '
+          'when the bar is full, on $target.',
+      'motion' => 'The lift is felt starting and stopping: guidance goes on by itself '
+          'when it stops at $target, or as you walk out.',
+      _ => 'The barometer notices when you reach $target: guidance goes on by itself.',
+    };
+
     return Semantics(
       liveRegion: true,
       label: '$verb $way to $target',
       child: Container(
         color: color,
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
-            child: Column(
-              children: [
-                const Spacer(),
-                Icon(lift ? Icons.elevator_outlined : Icons.stairs_outlined, size: 84, color: on),
-                const SizedBox(height: 8),
-                // A gentle bob in the direction to go (still if reduce motion is on).
-                TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: 1),
-                  duration: Duration(milliseconds: still ? 0 : 900),
-                  curve: Curves.easeOutBack,
-                  builder: (context, t, child) => Transform.translate(
-                    offset: Offset(0, (prompt.up ? -1 : 1) * 10 * t),
-                    child: child,
-                  ),
-                  child: Icon(
-                    prompt.up ? Icons.keyboard_double_arrow_up : Icons.keyboard_double_arrow_down,
-                    size: 44,
-                    color: on.withValues(alpha: 0.85),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  '$verb $way',
-                  textAlign: TextAlign.center,
-                  style: text.headlineSmall?.copyWith(color: on),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'to $target',
-                  textAlign: TextAlign.center,
-                  style: text.titleLarge?.copyWith(color: on.withValues(alpha: 0.9), fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 22),
-                // G -> 1 badge
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _FloorBadge(label: _floorShort(prompt.from), color: color, faded: true),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Icon(Icons.arrow_forward, color: on),
+          bottom: false,
+          // Fits any screen: compact on short ones, and scrolls rather than
+          // overflowing if it still does not fit (large text settings).
+          child: LayoutBuilder(
+            builder: (context, box) {
+              final compact = box.maxHeight < 620;
+              final tiny = box.maxHeight < 470;
+              final pad = compact ? 16.0 : 24.0;
+              return SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: box.maxHeight),
+                  child: IntrinsicHeight(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(24, pad, 24, pad),
+                      child: Column(
+                        children: [
+                          const Spacer(),
+                          if (!tiny)
+                            Icon(lift ? Icons.elevator_outlined : Icons.stairs_outlined,
+                                size: compact ? 56 : 84, color: on),
+                          if (!tiny) const SizedBox(height: 4),
+                          // A gentle bob in the direction to go (still if reduce motion is on).
+                          TweenAnimationBuilder<double>(
+                            tween: Tween(begin: 0, end: 1),
+                            duration: Duration(milliseconds: still ? 0 : 900),
+                            curve: Curves.easeOutBack,
+                            builder: (context, t, child) => Transform.translate(
+                              offset: Offset(0, (prompt.up ? -1 : 1) * 8 * t),
+                              child: child,
+                            ),
+                            child: Icon(
+                              prompt.up ? Icons.keyboard_double_arrow_up : Icons.keyboard_double_arrow_down,
+                              size: compact ? 32 : 44,
+                              color: on.withValues(alpha: 0.85),
+                            ),
+                          ),
+                          SizedBox(height: compact ? 8 : 16),
+                          Text(
+                            '$verb $way',
+                            textAlign: TextAlign.center,
+                            style: (compact ? text.titleLarge : text.headlineSmall)
+                                ?.copyWith(color: on, fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'to $target',
+                            textAlign: TextAlign.center,
+                            style: (compact ? text.titleMedium : text.titleLarge)
+                                ?.copyWith(color: on.withValues(alpha: 0.9), fontWeight: FontWeight.w500),
+                          ),
+                          SizedBox(height: compact ? 12 : 20),
+                          // G -> 1 badge
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _FloorBadge(label: _floorShort(prompt.from), color: color, faded: true, small: compact),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                child: Icon(Icons.arrow_forward, color: on),
+                              ),
+                              _FloorBadge(label: _floorShort(prompt.to), color: color, small: compact),
+                            ],
+                          ),
+                          if (automatic) ...[
+                            SizedBox(height: compact ? 14 : 22),
+                            SizedBox(
+                              width: 220,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: LinearProgressIndicator(
+                                  value: progress,
+                                  minHeight: 6,
+                                  color: on,
+                                  backgroundColor: on.withValues(alpha: 0.25),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              progress == null
+                                  ? (lift ? 'Waiting for the lift to move…' : 'Counting your steps on the stairs…')
+                                  : (lift ? 'In the lift: ${(progress! * 100).round()} %' : 'On the stairs: ${(progress! * 100).round()} %'),
+                              textAlign: TextAlign.center,
+                              style: text.bodyMedium?.copyWith(color: on.withValues(alpha: 0.95)),
+                            ),
+                            if (!compact) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                sensingText,
+                                textAlign: TextAlign.center,
+                                style: text.bodySmall?.copyWith(color: on.withValues(alpha: 0.8)),
+                              ),
+                            ],
+                          ],
+                          const Spacer(),
+                          SizedBox(height: compact ? 12 : 20),
+                          // Automatic: the tap is only a backup, so a lighter button.
+                          SizedBox(
+                            width: double.infinity,
+                            height: compact ? 48 : 54,
+                            child: automatic
+                                ? OutlinedButton.icon(
+                                    onPressed: onConfirm,
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: on,
+                                      side: BorderSide(color: on.withValues(alpha: 0.7), width: 1.5),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    ),
+                                    icon: const Icon(Icons.check),
+                                    label: Text('Already on $target? Tap', overflow: TextOverflow.ellipsis),
+                                  )
+                                : FilledButton.icon(
+                                    onPressed: onConfirm,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: on,
+                                      foregroundColor: color,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    ),
+                                    icon: const Icon(Icons.check),
+                                    label: Text("I'm on $target", overflow: TextOverflow.ellipsis),
+                                  ),
+                          ),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 4,
+                            children: [
+                              if (onScan != null)
+                                TextButton.icon(
+                                  onPressed: onScan,
+                                  style: TextButton.styleFrom(foregroundColor: on, minimumSize: const Size(48, 44)),
+                                  icon: const Icon(Icons.qr_code_scanner, size: 20),
+                                  label: const Text('Scan landing sign'),
+                                ),
+                              TextButton.icon(
+                                onPressed: onBack,
+                                style: TextButton.styleFrom(foregroundColor: on, minimumSize: const Size(48, 44)),
+                                icon: const Icon(Icons.undo, size: 20),
+                                label: const Text('Previous step'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    _FloorBadge(label: _floorShort(prompt.to), color: color),
-                  ],
-                ),
-                const Spacer(),
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: FilledButton.icon(
-                    onPressed: onConfirm,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: on,
-                      foregroundColor: color,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                    icon: const Icon(Icons.check),
-                    label: Text("I'm on $target"),
                   ),
                 ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: onBack,
-                  style: TextButton.styleFrom(foregroundColor: on, minimumSize: const Size(120, 48)),
-                  child: const Text('Back to the previous step'),
-                ),
-              ],
-            ),
+              );
+            },
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "You seem to be on floor 2": the barometer saw you change floor away
+/// from the route's stairs / lift.
+class _WrongFloorBanner extends StatelessWidget {
+  final int floor;
+  final int routeFloor;
+  final VoidCallback onReroute;
+  final VoidCallback onDismiss;
+
+  const _WrongFloorBanner({
+    required this.floor,
+    required this.routeFloor,
+    required this.onReroute,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    String name(int f) => f == 0 ? 'the ground floor' : 'floor $f';
+    return Semantics(
+      liveRegion: true,
+      child: Material(
+        color: const Color(0xFFFFF4E5),
+        elevation: 4,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.layers_outlined, color: Color(0xFF8A5300)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'You seem to be on ${name(floor)}. The route goes on ${name(routeFloor)}.',
+                      style: text.bodyMedium?.copyWith(color: AppColors.ink, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: onDismiss,
+                    style: TextButton.styleFrom(foregroundColor: const Color(0xFF8A5300)),
+                    child: Text("I'm on ${name(routeFloor)}"),
+                  ),
+                  TextButton(
+                    onPressed: onReroute,
+                    style: TextButton.styleFrom(foregroundColor: const Color(0xFF8A5300)),
+                    child: const Text('New route from here'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Standing still and facing away from the route: "Turn around".
+class _TurnHint extends StatelessWidget {
+  final double angle; // -180..180, positive = turn right
+
+  const _TurnHint({required this.angle});
+
+  @override
+  Widget build(BuildContext context) {
+    final around = angle.abs() >= 135;
+    final label = around ? 'Turn around' : (angle > 0 ? 'Turn right' : 'Turn left');
+    final icon = around ? Icons.u_turn_left : (angle > 0 ? Icons.turn_right : Icons.turn_left);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.ink.withValues(alpha: 0.88),
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              '$label to face the route',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+          ],
         ),
       ),
     );
@@ -1720,14 +2011,15 @@ class _FloorBadge extends StatelessWidget {
   final String label;
   final Color color;
   final bool faded;
+  final bool small;
 
-  const _FloorBadge({required this.label, required this.color, this.faded = false});
+  const _FloorBadge({required this.label, required this.color, this.faded = false, this.small = false});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 56,
-      height: 56,
+      width: small ? 46 : 56,
+      height: small ? 46 : 56,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: faded ? Colors.white.withValues(alpha: 0.25) : Colors.white,
@@ -1736,7 +2028,7 @@ class _FloorBadge extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(
-          fontSize: 24,
+          fontSize: small ? 20 : 24,
           fontWeight: FontWeight.w700,
           color: faded ? Colors.white : color,
         ),
@@ -1802,16 +2094,4 @@ class _FromRow extends StatelessWidget {
       ),
     );
   }
-}
-
-/// What live guidance is doing with the GPS.
-enum _Gps {
-  off, // not started (or no outdoor part)
-  starting, // asking for permission / waiting for the first fix
-  live, // following you
-  weak, // fixes too rough to use
-  paused, // turned off by the user
-  blocked, // location off or not allowed
-  door, // reached the building entrance: inside is by hand
-  inside, // on an indoor step
 }
