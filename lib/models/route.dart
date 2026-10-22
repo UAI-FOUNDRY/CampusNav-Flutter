@@ -46,11 +46,19 @@ class IndoorPoint {
   final double x;
   final double y;
 
+  /// The same point in GPS terms (the backend ties each floor plan to the
+  /// map). Live guidance uses it to follow you through the whole route.
+  /// Null with older backends.
+  final double? lat;
+  final double? lng;
+
   const IndoorPoint({
     required this.id,
     required this.name,
     required this.x,
     required this.y,
+    this.lat,
+    this.lng,
   });
 }
 
@@ -102,6 +110,8 @@ class RouteLeg {
             name: (p['name'] ?? '').toString(),
             x: _asDouble(p['x']) ?? 0,
             y: _asDouble(p['y']) ?? 0,
+            lat: _asDouble(p['lat']),
+            lng: _asDouble(p['lng']),
           ),
       ],
     );
@@ -174,6 +184,13 @@ class RouteStep {
       title = 'Go inside';
     } else if (text.startsWith('Go outside')) {
       title = 'Go outside';
+    }
+    // The backend marks the stairs / lift steps ("kind"). Live guidance needs
+    // them to know where the floor changes, and they get their own icon.
+    final kind = json['kind']?.toString();
+    if (kind == 'stairs' || kind == 'lift') {
+      type = kind!;
+      title = kind == 'lift' ? 'Take the lift' : 'Take the stairs';
     }
 
     // "Start at Main Gate and walk 125 m" -> "Walk 125 m"

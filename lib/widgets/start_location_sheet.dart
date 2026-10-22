@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,6 +8,7 @@ import '../models/start_point.dart';
 import '../screens/scan_screen.dart';
 import '../services/api_service.dart';
 import '../services/location_service.dart';
+import '../services/spot_locator.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../theme/destination_style.dart';
@@ -61,16 +64,26 @@ class _StartSheetState extends State<_StartSheet> {
   bool _loading = true;
 
   bool _locating = false;
+  String _status = '';
   LocateResult? _problem;
+
+  // "Where exactly are you?": shown when the location is not sure enough
+  // (inside, GPS cannot tell the rooms apart). [_chooserFloor] is the floor
+  // chip picked: a floor number, -1 for outside, null for any.
+  LocateOutcome? _outcome;
+  int? _chooserFloor;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // GPS on now, so "Use my location" has fixes ready when tapped.
+    unawaited(SpotLocator.warmUp());
   }
 
   @override
   void dispose() {
+    SpotLocator.coolDown();
     _search.dispose();
     super.dispose();
   }
@@ -112,16 +125,37 @@ class _StartSheetState extends State<_StartSheet> {
     setState(() {
       _locating = true;
       _problem = null;
+      _outcome = null;
+      _status = 'Finding you…';
     });
-    final result = await LocationService.locate(_all);
+    final outcome = await SpotLocator.locate(
+      _all,
+      onStatus: (s) {
+        if (mounted) setState(() => _status = s);
+      },
+    );
     if (!mounted) return;
-    final point = result.point;
-    if (point == null) {
+    final problem = outcome.problem;
+    if (problem != null) {
       HapticFeedback.lightImpact();
       setState(() {
         _locating = false;
-        _problem = result;
+        _problem = problem;
       });
+      return;
+    }
+    final point = outcome.point;
+    if (point == null) {
+      // Not sure (inside): ask which of the nearby spots it is.
+      HapticFeedback.selectionClick();
+      setState(() {
+        _locating = false;
+        _outcome = outcome;
+        _chooserFloor = outcome.floor ?? (outcome.indoor ? null : -1);
+      });
+      if (widget.scroll.hasClients) {
+        widget.scroll.animateTo(0, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      }
       return;
     }
 
@@ -130,14 +164,14 @@ class _StartSheetState extends State<_StartSheet> {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     navigator.pop();
-    final rough = (point.accuracy ?? 0) > 40;
+    final rough = point.live && (point.accuracy ?? 0) > 25;
     messenger.showSnackBar(SnackBar(
       behavior: SnackBarBehavior.floating,
       duration: Duration(seconds: rough ? 6 : 3),
       content: Text(rough
-          ? '${result.message} GPS is rough here (±${point.accuracy!.round()} m): '
+          ? '${outcome.message} GPS is rough here (±${point.accuracy!.round()} m): '
               'for an exact start, scan the QR code on a nearby sign.'
-          : result.message),
+          : outcome.message),
       action: rough
           ? SnackBarAction(
               label: 'Scan',
@@ -148,6 +182,51 @@ class _StartSheetState extends State<_StartSheet> {
             )
           : null,
     ));
+  }
+
+  /// A spot picked in "Where exactly are you?": start there, and teach the
+  /// barometer and the Wi-Fi so next time the app knows by itself.
+  void _pickHere(StartPoint spot) {
+    final outcome = _outcome;
+    if (outcome != null) SpotLocator.confirm(outcome, spot);
+    HapticFeedback.mediumImpact();
+    AppState.setStart(spot);
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(context).pop();
+    messenger.showSnackBar(SnackBar(
+      behavior: SnackBarBehavior.floating,
+      content: Text('Starting from ${spot.name}'),
+    ));
+  }
+
+  /// The chooser's spots for the floor chip picked.
+  List<LocateCandidate> _chooserList(LocateOutcome o) {
+    final chip = _chooserFloor;
+    final lat = o.lat, lng = o.lng;
+    if (lat == null || lng == null) return o.candidates.take(6).toList();
+    final ranked = SpotLocator.rank(
+      lat,
+      lng,
+      o.accuracy ?? 30,
+      spots: _all,
+      floor: chip == null || chip < 0 ? null : chip,
+      floorSure: chip != null && chip >= 0,
+      indoorLikely: chip == null ? o.indoor : chip >= 0,
+      wifi: o.wifi,
+    );
+    bool fits(StartPoint s) {
+      if (chip == null) return true;
+      if (chip < 0) return !s.indoor;
+      return s.indoor && (s.floor ?? 0) == chip;
+    }
+
+    return [for (final c in ranked) if (fits(c.spot)) c].take(6).toList();
+  }
+
+  /// Floors that have spots (for the chooser's chips).
+  List<int> get _floors {
+    final set = <int>{for (final s in _all) if (s.indoor) s.floor ?? 0};
+    return set.toList()..sort();
   }
 
   /// The fix for a location problem, if there is one.
@@ -261,6 +340,7 @@ class _StartSheetState extends State<_StartSheet> {
   Widget _top(TextTheme text, StartPoint current) {
     final problem = _problem;
     final fix = problem?.problem == null ? null : _fixFor(problem!.problem!);
+    final outcome = _outcome;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
@@ -294,10 +374,10 @@ class _StartSheetState extends State<_StartSheet> {
                     icon: Icons.my_location,
                     title: current.live ? 'Update location' : 'Use my location',
                     subtitle: _locating
-                        ? 'Finding you…'
+                        ? _status
                         : current.live
                             ? current.hint
-                            : 'GPS · best outdoors',
+                            : 'GPS, floor & Wi-Fi',
                     busy: _locating,
                     active: current.live,
                     onTap: _locating ? null : _useLocation,
@@ -326,6 +406,25 @@ class _StartSheetState extends State<_StartSheet> {
                       actionLabel: fix?.$1,
                       onAction: fix?.$2,
                       onClose: () => setState(() => _problem = null),
+                    ),
+                  ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            alignment: Alignment.topCenter,
+            child: outcome == null
+                ? const SizedBox(width: double.infinity)
+                : Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: _WhereExactly(
+                      outcome: outcome,
+                      candidates: _chooserList(outcome),
+                      floors: _floors,
+                      selected: _chooserFloor,
+                      onFloor: (f) => setState(() => _chooserFloor = f),
+                      onPick: _pickHere,
+                      onScan: _scan,
+                      onClose: () => setState(() => _outcome = null),
                     ),
                   ),
           ),
@@ -448,6 +547,161 @@ class _ActionTile extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Where exactly are you?": the few spots that fit the GPS position, on
+/// the floor the barometer / Wi-Fi says, with chips to switch floor.
+class _WhereExactly extends StatelessWidget {
+  final LocateOutcome outcome;
+  final List<LocateCandidate> candidates;
+  final List<int> floors;
+  final int? selected; // floor, -1 = outside, null = any
+  final ValueChanged<int?> onFloor;
+  final ValueChanged<StartPoint> onPick;
+  final VoidCallback onScan;
+  final VoidCallback onClose;
+
+  const _WhereExactly({
+    required this.outcome,
+    required this.candidates,
+    required this.floors,
+    required this.selected,
+    required this.onFloor,
+    required this.onPick,
+    required this.onScan,
+    required this.onClose,
+  });
+
+  static String _floorName(int f) => f == 0 ? 'Ground' : 'Floor $f';
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    const accent = AppColors.academic;
+    final guess = outcome.floor;
+    final floorLine = guess == null
+        ? null
+        : '${outcome.floorSure ? 'You are on' : 'Probably on'} '
+            '${guess == 0 ? 'the ground floor' : 'floor $guess'} (${outcome.floorBasis})';
+
+    Widget chip(String label, int? value) => ChoiceChip(
+          label: Text(label),
+          selected: selected == value,
+          showCheckmark: false,
+          onSelected: (_) => onFloor(value),
+        );
+
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: accent, width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.my_location, size: 20, color: accent),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Where exactly are you?', style: text.titleMedium)),
+                IconButton(
+                  tooltip: 'Close',
+                  icon: const Icon(Icons.close, size: 20, color: AppColors.inkMuted),
+                  onPressed: onClose,
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: Text(
+                floorLine == null ? outcome.message : '${outcome.message} $floorLine.',
+                style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final f in floors) chip(_floorName(f), f),
+                chip('Outside', -1),
+                chip('Any', null),
+              ],
+            ),
+            const SizedBox(height: 4),
+            if (candidates.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(0, 10, 10, 6),
+                child: Text(
+                  'No spots there near your position. Search below, or scan a sign.',
+                  style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
+                ),
+              ),
+            for (final c in candidates)
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => onPick(c.spot),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 52),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 6, 8, 6),
+                    child: Row(
+                      children: [
+                        Icon(
+                          c.recent
+                              ? Icons.history
+                              : c.byWifi
+                                  ? Icons.wifi
+                                  : (c.spot.indoor ? Icons.meeting_room_outlined : Icons.park_outlined),
+                          size: 20,
+                          color: AppColors.ink,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                c.spot.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: text.titleSmall,
+                              ),
+                              Text(
+                                c.recent
+                                    ? 'Where you were a few minutes ago · ${c.spot.hint}'
+                                    : c.byWifi
+                                    ? 'Matches the Wi-Fi here · ${c.spot.hint}'
+                                    : 'About ${c.distance.round()} m from your GPS position · ${c.spot.hint}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: text.bodySmall?.copyWith(color: AppColors.inkMuted),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right, color: AppColors.inkMuted),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            TextButton.icon(
+              onPressed: onScan,
+              icon: const Icon(Icons.qr_code_scanner, size: 18),
+              label: const Text('Not listed? Scan a sign'),
+            ),
+          ],
         ),
       ),
     );

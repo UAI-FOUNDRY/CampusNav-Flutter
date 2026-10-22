@@ -34,6 +34,10 @@ class ZoomableView extends StatefulWidget {
   /// Told whenever the rotation changes (radians), e.g. for a compass button.
   final ValueChanged<double>? onRotationChanged;
 
+  /// Told when the user starts moving the view by hand (e.g. to stop
+  /// following the person icon).
+  final VoidCallback? onInteract;
+
   const ZoomableView({
     super.key,
     required this.builder,
@@ -44,6 +48,7 @@ class ZoomableView extends StatefulWidget {
     this.focusFill = 0.85,
     this.rotate = true,
     this.onRotationChanged,
+    this.onInteract,
   });
 
   @override
@@ -150,6 +155,12 @@ class ZoomableViewState extends State<ZoomableView>
 
   /// Current rotation in radians (0 = north up / as drawn).
   double get rotation => _angleOf(_matrix.value);
+
+  /// Where the child point [child] is on screen right now.
+  Offset toScreen(Offset child) => MatrixUtils.transformPoint(_matrix.value, child);
+
+  /// True while an animation (zoom button, showPoint ...) is running.
+  bool get animating => _animation.isAnimating;
 
   /// Rebuild the child only when zoom or rotation really change, not on pans.
   void _onTransform() {
@@ -292,6 +303,7 @@ class ZoomableViewState extends State<ZoomableView>
   void _onScaleStart(ScaleStartDetails d) {
     _animation.stop();
     _moved = true;
+    widget.onInteract?.call();
     _lastScale = 1;
     _lastRotation = 0;
     _lastFocal = d.localFocalPoint;

@@ -1,5 +1,4 @@
-import 'dart:async';
-
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../models/start_point.dart';
@@ -16,85 +15,10 @@ class LocateResult {
   const LocateResult.fail(LocateProblem this.problem, this.message) : point = null;
 }
 
-/// The phone's GPS position as a start point.
-///
-/// The route itself starts at the exact position (the server snaps it to the
-/// nearest campus path). The start point also remembers the nearest named
-/// outdoor spot, for walking times and the "near ..." text.
+/// Location permission and the GPS streams. "Use my location" itself is
+/// [SpotLocator] (spot_locator.dart): GPS, barometer and Wi-Fi together.
 class LocationService {
   LocationService._();
-
-  /// Farther than this from every campus spot (plus the GPS error) counts as
-  /// off campus. Matches the server's MAX_SNAP_M.
-  static const offCampusMetres = 150.0;
-
-  static Future<LocateResult> locate(List<StartPoint> spots) async {
-    // Spots with a GPS position; outdoor ones first (GPS is poor indoors).
-    final outdoor = [for (final s in spots) if (s.hasGeo && !s.indoor) s];
-    final candidates = outdoor.isNotEmpty ? outdoor : [for (final s in spots) if (s.hasGeo) s];
-    if (candidates.isEmpty) {
-      return const LocateResult.fail(
-        LocateProblem.noMap,
-        'The campus map is not loaded yet, so your position cannot be matched to a place.',
-      );
-    }
-
-    final blocked = await permissionProblem();
-    if (blocked != null) return blocked;
-
-    final Position position;
-    try {
-      position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-          timeLimit: Duration(seconds: 15),
-        ),
-      );
-    } on TimeoutException {
-      return const LocateResult.fail(
-        LocateProblem.timeout,
-        'No GPS fix yet. GPS is weak inside buildings: step outside, or scan the QR code on a nearby sign.',
-      );
-    } catch (_) {
-      return const LocateResult.fail(
-        LocateProblem.failed,
-        'Could not read your location. Try again, or pick a place from the list.',
-      );
-    }
-
-    StartPoint? nearest;
-    var best = double.infinity;
-    for (final s in candidates) {
-      final d = Geolocator.distanceBetween(position.latitude, position.longitude, s.lat!, s.lng!);
-      if (d < best) {
-        best = d;
-        nearest = s;
-      }
-    }
-    final near = nearest!;
-    final accuracy = position.accuracy;
-
-    if (best > offCampusMetres + accuracy) {
-      final away = best >= 1000 ? '${(best / 1000).toStringAsFixed(1)} km' : '${best.round()} m';
-      return LocateResult.fail(
-        LocateProblem.offCampus,
-        'You seem to be off campus ($away from the nearest path). Routes start on campus: pick a place instead.',
-      );
-    }
-
-    final point = StartPoint(
-      id: near.id,
-      name: 'My location',
-      hint: 'Near ${near.name} · ±${accuracy.round()} m',
-      type: 'gps',
-      group: near.group,
-      lat: position.latitude,
-      lng: position.longitude,
-      live: true,
-      accuracy: accuracy,
-    );
-    return LocateResult.ok(point, 'Starting from your location, near ${near.name}.');
-  }
 
   /// Location on and allowed (asks once if needed)? Null when fine,
   /// otherwise what is wrong.
@@ -124,14 +48,31 @@ class LocationService {
     return null;
   }
 
-  /// Live positions while guiding: the best accuracy, a new fix every couple
-  /// of metres walked.
-  static Stream<Position> follow() => Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 2,
-        ),
+  /// Live positions while guiding: the best accuracy, one fix a second
+  /// (with speed and direction), also while standing still.
+  static Stream<Position> follow() =>
+      Geolocator.getPositionStream(locationSettings: settings());
+
+  /// Settings for a stream of precise fixes every [interval].
+  static LocationSettings settings({Duration interval = const Duration(seconds: 1)}) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        intervalDuration: interval,
       );
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        activityType: ActivityType.fitness, // walking: no snapping to roads
+        distanceFilter: 0,
+        pauseLocationUpdatesAutomatically: false,
+        allowBackgroundLocationUpdates: false,
+      );
+    }
+    return const LocationSettings(accuracy: LocationAccuracy.bestForNavigation);
+  }
 
   static Future<void> openLocationSettings() => Geolocator.openLocationSettings();
 

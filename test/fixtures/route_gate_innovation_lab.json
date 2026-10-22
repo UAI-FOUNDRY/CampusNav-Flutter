@@ -1,0 +1,491 @@
+{
+ "from": "gate_main",
+ "to": "a2_innovation_lab",
+ "to_name": "Innovation Lab (Incubation Launchpad)",
+ "to_within": null,
+ "distance_m": 276.5,
+ "duration_s": 253,
+ "floors": [
+  0,
+  2
+ ],
+ "nodes": [
+  "gate_main",
+  "main_junction02",
+  "quad_south_entrance",
+  "a0_quad_south_exit",
+  "a0_quad_s_mid",
+  "a0_quad_se",
+  "a0_ew_2",
+  "a0_adminlobby",
+  "a0_lobby_c",
+  "a0_c_lobby_b_e__a0_reception",
+  "a0_c_lobby_b_e__a0_aspretto",
+  "a0_lobby_b_s",
+  "a0_c_lobby_b_e__v2",
+  "a0_stair_b",
+  "a2_stair_b",
+  "a2_p3_s",
+  "a2_p3_508",
+  "a2_p3_451",
+  "a2_c_p451__a2_conference",
+  "a2_fp_s",
+  "a2_c_fp__a2_faculty_01",
+  "a2_c_fp__a2_faculty_02",
+  "a2_c_fp__a2_faculty_03",
+  "a2_c_fp__a2_faculty_04",
+  "a2_c_fp__a2_faculty_05",
+  "a2_c_fp__a2_faculty_06",
+  "a2_c_fp__a2_faculty_07",
+  "a2_c_fp__a2_ws01",
+  "a2_ws01",
+  "a2_stair_innov",
+  "a2_innovation_lab"
+ ],
+ "legs": [
+  {
+   "type": "outdoor",
+   "distance_m": 140.0,
+   "polyline": [
+    [
+     18.903652,
+     73.373594
+    ],
+    [
+     18.903666,
+     73.373737
+    ],
+    [
+     18.903626,
+     73.373876
+    ],
+    [
+     18.903484,
+     73.374143
+    ],
+    [
+     18.903308,
+     73.374345
+    ],
+    [
+     18.903248,
+     73.37443
+    ],
+    [
+     18.903216,
+     73.374542
+    ],
+    [
+     18.90319,
+     73.37456
+    ],
+    [
+     18.903073,
+     73.374576
+    ],
+    [
+     18.903,
+     73.374554
+    ]
+   ]
+  },
+  {
+   "type": "indoor",
+   "floor": 0,
+   "floor_label": "Ground floor",
+   "image": "ground.png",
+   "image_size": [
+    1357,
+    882
+   ],
+   "distance_m": 59.7,
+   "points": [
+    {
+     "id": "a0_quad_south_exit",
+     "name": "Quadrangle South Entrance",
+     "x": 855,
+     "y": 790,
+     "lat": 18.9029984,
+     "lng": 73.3746672
+    },
+    {
+     "id": "a0_quad_s_mid",
+     "name": "",
+     "x": 856.7,
+     "y": 773.2,
+     "lat": 18.9029894,
+     "lng": 73.3746734
+    },
+    {
+     "id": "a0_quad_se",
+     "name": "",
+     "x": 957.3,
+     "y": 773.2,
+     "lat": 18.9029437,
+     "lng": 73.3745999
+    },
+    {
+     "id": "a0_ew_2",
+     "name": "",
+     "x": 957.3,
+     "y": 635.8,
+     "lat": 18.902818,
+     "lng": 73.3746872
+    },
+    {
+     "id": "a0_adminlobby",
+     "name": "Admin Lobby gate",
+     "x": 981,
+     "y": 635.8,
+     "lat": 18.9028106,
+     "lng": 73.3746753
+    },
+    {
+     "id": "a0_lobby_c",
+     "name": "Lobby",
+     "x": 1021.5,
+     "y": 635.8,
+     "lat": 18.9027914,
+     "lng": 73.3746446
+    },
+    {
+     "id": "a0_c_lobby_b_e__a0_aspretto",
+     "name": "",
+     "x": 1021.5,
+     "y": 787,
+     "lat": 18.9028621,
+     "lng": 73.3745954
+    },
+    {
+     "id": "a0_lobby_b_s",
+     "name": "",
+     "x": 1021.5,
+     "y": 763.8,
+     "lat": 18.9028711,
+     "lng": 73.3745892
+    },
+    {
+     "id": "a0_c_lobby_b_e__v2",
+     "name": "",
+     "x": 1021.5,
+     "y": 813,
+     "lat": 18.9028801,
+     "lng": 73.3745829
+    },
+    {
+     "id": "a0_stair_b",
+     "name": "Spiral staircase (Block B)",
+     "x": 1021,
+     "y": 813,
+     "lat": 18.902883,
+     "lng": 73.3745876
+    }
+   ]
+  },
+  {
+   "type": "indoor",
+   "floor": 2,
+   "floor_label": "Second floor",
+   "image": "second.png",
+   "image_size": [
+    1358,
+    919
+   ],
+   "distance_m": 52.8,
+   "points": [
+    {
+     "id": "a2_stair_b",
+     "name": "Spiral staircase (Block B)",
+     "x": 929,
+     "y": 818,
+     "lat": 18.9028961,
+     "lng": 73.3745854
+    },
+    {
+     "id": "a2_p3_s",
+     "name": "Block B passage (second floor)",
+     "x": 915.2,
+     "y": 799.2,
+     "lat": 18.9028751,
+     "lng": 73.3745983
+    },
+    {
+     "id": "a2_p3_451",
+     "name": "",
+     "x": 915.2,
+     "y": 598.0,
+     "lat": 18.902745,
+     "lng": 73.3746887
+    },
+    {
+     "id": "a2_c_p451__a2_conference",
+     "name": "",
+     "x": 965,
+     "y": 598.0,
+     "lat": 18.9027309,
+     "lng": 73.3746662
+    },
+    {
+     "id": "a2_fp_s",
+     "name": "",
+     "x": 959.1,
+     "y": 598.0,
+     "lat": 18.9027236,
+     "lng": 73.3746543
+    },
+    {
+     "id": "a2_c_fp__a2_ws01",
+     "name": "",
+     "x": 959.1,
+     "y": 435,
+     "lat": 18.9026124,
+     "lng": 73.3747316
+    },
+    {
+     "id": "a2_ws01",
+     "name": "Work Station 01",
+     "x": 964,
+     "y": 435,
+     "lat": 18.9026058,
+     "lng": 73.3747209
+    },
+    {
+     "id": "a2_stair_innov",
+     "name": "Spiral staircase",
+     "x": 979.5,
+     "y": 424,
+     "lat": 18.9025905,
+     "lng": 73.3747145
+    },
+    {
+     "id": "a2_innovation_lab",
+     "name": "Innovation Lab",
+     "x": 979.5,
+     "y": 414,
+     "lat": 18.9025838,
+     "lng": 73.3747192
+    }
+   ]
+  }
+ ],
+ "polyline": [
+  [
+   18.903652,
+   73.373594
+  ],
+  [
+   18.903666,
+   73.373737
+  ],
+  [
+   18.903626,
+   73.373876
+  ],
+  [
+   18.903484,
+   73.374143
+  ],
+  [
+   18.903308,
+   73.374345
+  ],
+  [
+   18.903248,
+   73.37443
+  ],
+  [
+   18.903216,
+   73.374542
+  ],
+  [
+   18.90319,
+   73.37456
+  ],
+  [
+   18.903073,
+   73.374576
+  ],
+  [
+   18.903,
+   73.374554
+  ]
+ ],
+ "steps": [
+  {
+   "instruction": "Start at Main Gate and walk 115 m",
+   "distance_m": 115.0,
+   "node_id": "gate_main",
+   "space": "outdoor",
+   "floor": 0,
+   "kind": "start_walk",
+   "lat": 18.903652,
+   "lng": 73.373594,
+   "bearing": 115.9
+  },
+  {
+   "instruction": "Bear right and walk 25 m",
+   "distance_m": 25.0,
+   "node_id": "main_junction02",
+   "space": "outdoor",
+   "floor": 0,
+   "kind": "turn_right",
+   "lat": 18.903216,
+   "lng": 73.374542,
+   "bearing": 177.0
+  },
+  {
+   "instruction": "Go inside through Quadrangle South Entrance and walk 12 m",
+   "distance_m": 11.9,
+   "node_id": "quad_south_entrance",
+   "space": "outdoor",
+   "floor": 0,
+   "kind": "enter",
+   "lat": 18.903,
+   "lng": 73.374554,
+   "bearing": 90.9
+  },
+  {
+   "instruction": "Turn right into the Quadrangle and walk 11 m",
+   "distance_m": 11.1,
+   "node_id": "a0_quad_south_exit",
+   "space": "indoor",
+   "floor": 0,
+   "kind": "turn_right",
+   "lat": 18.9029984,
+   "lng": 73.3746672,
+   "x": 855,
+   "y": 790,
+   "bearing": 229.3
+  },
+  {
+   "instruction": "Turn left into the Block B walkway and walk 18 m",
+   "distance_m": 17.8,
+   "node_id": "a0_quad_se",
+   "space": "indoor",
+   "floor": 0,
+   "kind": "turn_left",
+   "lat": 18.9029437,
+   "lng": 73.3745999,
+   "x": 957.3,
+   "y": 773.2,
+   "bearing": 146.7
+  },
+  {
+   "instruction": "Turn right into the Lobby and walk 6 m",
+   "distance_m": 5.7,
+   "node_id": "a0_ew_2",
+   "space": "indoor",
+   "floor": 0,
+   "kind": "turn_right",
+   "lat": 18.902818,
+   "lng": 73.3746872,
+   "x": 957.3,
+   "y": 635.8,
+   "bearing": 236.6
+  },
+  {
+   "instruction": "Turn right at Lobby and walk 13 m. Spiral staircase (Block B) is on your right",
+   "distance_m": 13.2,
+   "node_id": "a0_lobby_c",
+   "space": "indoor",
+   "floor": 0,
+   "kind": "turn_right",
+   "lat": 18.9027914,
+   "lng": 73.3746446,
+   "x": 1021.5,
+   "y": 635.8,
+   "bearing": 326.6
+  },
+  {
+   "instruction": "Take the Spiral staircase (Block B) up to the Second floor",
+   "distance_m": 24.0,
+   "node_id": "a0_stair_b",
+   "space": "indoor",
+   "floor": 0,
+   "kind": "stairs",
+   "lat": 18.902883,
+   "lng": 73.3745876,
+   "x": 1021,
+   "y": 813,
+   "bearing": 144.1
+  },
+  {
+   "instruction": "Walk 20 m through Passage 03",
+   "distance_m": 21.3,
+   "node_id": "a2_stair_b",
+   "space": "indoor",
+   "floor": 2,
+   "kind": "walk",
+   "lat": 18.9028961,
+   "lng": 73.3745854,
+   "x": 929,
+   "y": 818,
+   "bearing": 147.4
+  },
+  {
+   "instruction": "Turn right into the Block B passage and walk 5 m",
+   "distance_m": 4.6,
+   "node_id": "a2_p3_451",
+   "space": "indoor",
+   "floor": 2,
+   "kind": "turn_right",
+   "lat": 18.902745,
+   "lng": 73.3746887,
+   "x": 915.2,
+   "y": 598.0,
+   "bearing": 236.7
+  },
+  {
+   "instruction": "Turn left into the Faculty passage and walk 16 m",
+   "distance_m": 15.6,
+   "node_id": "a2_fp_s",
+   "space": "indoor",
+   "floor": 2,
+   "kind": "turn_left",
+   "lat": 18.9027236,
+   "lng": 73.3746543,
+   "x": 959.1,
+   "y": 598.0,
+   "bearing": 146.6
+  },
+  {
+   "instruction": "Turn right and walk 3 m to Spiral staircase",
+   "distance_m": 3.3,
+   "node_id": "a2_c_fp__a2_ws01",
+   "space": "indoor",
+   "floor": 2,
+   "kind": "turn_right",
+   "lat": 18.9026124,
+   "lng": 73.3747316,
+   "x": 959.1,
+   "y": 435,
+   "bearing": 216.5
+  },
+  {
+   "instruction": "Take the spiral staircase up to Innovation Lab",
+   "distance_m": 8.0,
+   "node_id": "a2_stair_innov",
+   "space": "indoor",
+   "floor": 2,
+   "kind": "stairs",
+   "lat": 18.9025905,
+   "lng": 73.3747145,
+   "x": 979.5,
+   "y": 424
+  },
+  {
+   "instruction": "Arrive at Innovation Lab (Incubation Launchpad)",
+   "distance_m": 0.0,
+   "node_id": "a2_innovation_lab",
+   "space": "indoor",
+   "floor": 2,
+   "kind": "arrive",
+   "lat": 18.9025838,
+   "lng": 73.3747192,
+   "x": 979.5,
+   "y": 414
+  }
+ ],
+ "panos": [],
+ "graph_version": "8d920a2d1a"
+}

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../data/campus.dart';
 import '../data/deep_link.dart';
+import '../services/spot_locator.dart';
 import '../state/app_state.dart';
 import '../theme/app_colors.dart';
 import '../widgets/slide_route.dart';
@@ -64,6 +67,9 @@ class _ScanScreenState extends State<ScanScreen> {
       _handled = true;
       HapticFeedback.mediumImpact();
       AppState.setStart(point);
+      // Standing at the sign: the floor is certain. Tell the barometer, and
+      // keep the Wi-Fi here as this spot's fingerprint (Android).
+      unawaited(SpotLocator.calibrateAt(point));
       final messenger = ScaffoldMessenger.of(context);
       Navigator.of(context).pop();
       messenger.showSnackBar(SnackBar(content: Text('You are at ${point.name}')));

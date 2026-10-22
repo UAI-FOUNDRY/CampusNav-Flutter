@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/route.dart';
+import '../services/live_guide.dart';
 import '../theme/app_colors.dart';
 import 'live_floor_plan.dart';
 import 'zoomable_view.dart';
@@ -35,6 +37,11 @@ class FloorPlanViewer extends StatefulWidget {
   /// below it.
   final double topInset;
 
+  /// Live guidance: where you are, every frame. The person icon follows it
+  /// (with the compass beam) and the view keeps it on screen until you move
+  /// the plan by hand ("Centre on me" follows again).
+  final ValueListenable<LivePose?>? live;
+
   const FloorPlanViewer({
     super.key,
     required this.image,
@@ -49,6 +56,7 @@ class FloorPlanViewer extends StatefulWidget {
     this.bottomInset = 0,
     this.controls = true,
     this.topInset = 0,
+    this.live,
   });
 
   @override
@@ -62,6 +70,66 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
   Rect _picture = Rect.zero;
   Size _view = Size.zero;
   double _rotation = 0; // radians, for the compass
+
+  // Live guidance: keep the person icon on screen.
+  bool _follow = true;
+  DateTime _lastFollow = DateTime.fromMillisecondsSinceEpoch(0);
+
+  @override
+  void initState() {
+    super.initState();
+    widget.live?.addListener(_onLive);
+    if (widget.live != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _centreOnMe());
+    }
+  }
+
+  @override
+  void didUpdateWidget(FloorPlanViewer old) {
+    super.didUpdateWidget(old);
+    if (old.live != widget.live) {
+      old.live?.removeListener(_onLive);
+      widget.live?.addListener(_onLive);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.live?.removeListener(_onLive);
+    super.dispose();
+  }
+
+  /// The person icon nears the edge of the view: bring it back in.
+  void _onLive() {
+    final plan = widget.live?.value?.plan;
+    final zoom = _zoomKey.currentState;
+    if (!_follow || plan == null || zoom == null || _picture.isEmpty || _view.isEmpty) return;
+    if (zoom.animating) return;
+    final now = DateTime.now();
+    if (now.difference(_lastFollow) < const Duration(milliseconds: 700)) return;
+    final child = Offset(
+      _picture.left + plan.x / widget.imageWidth * _picture.width,
+      _picture.top + plan.y / widget.imageHeight * _picture.height,
+    );
+    final at = zoom.toScreen(child);
+    final visible = math.max(1.0, _view.height - widget.bottomInset);
+    final inside = at.dx > _view.width * 0.22 &&
+        at.dx < _view.width * 0.78 &&
+        at.dy > widget.topInset + visible * 0.18 &&
+        at.dy < visible * 0.72;
+    if (inside) return;
+    _lastFollow = now;
+    showImagePoint(plan.x, plan.y);
+  }
+
+  void _centreOnMe() {
+    if (!mounted) return;
+    final plan = widget.live?.value?.plan;
+    if (plan == null) return;
+    setState(() => _follow = true);
+    _lastFollow = DateTime.now();
+    showImagePoint(plan.x, plan.y);
+  }
 
   /// Pan and zoom so the picture pixel (x, y) is in view, a little above the
   /// middle so a card at the bottom does not hide it.
@@ -133,6 +201,9 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                   maxFocusScale: widget.focus != null ? 4.0 : 8.0,
                   maxScale: math.max(6.0, _coverScale() * 4),
                   onRotationChanged: (r) => setState(() => _rotation = r),
+                  onInteract: widget.live == null || !_follow
+                      ? null
+                      : () => setState(() => _follow = false),
                   builder: (context, zoom, rotation) => Stack(
                     children: [
                       Positioned.fromRect(
@@ -145,6 +216,7 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                           pins: widget.pins,
                           color: widget.color,
                           person: widget.person,
+                          live: widget.live,
                           zoom: zoom,
                           rotation: rotation,
                         ),
@@ -167,6 +239,22 @@ class FloorPlanViewerState extends State<FloorPlanViewer> {
                 ),
               ),
             ),
+            // Moved by hand during guidance: one tap follows you again.
+            if (widget.live != null && !_follow)
+              Positioned(
+                right: 12,
+                bottom: widget.bottomInset + (widget.controls ? 170 : 16),
+                child: Material(
+                  color: Colors.white,
+                  elevation: 3,
+                  shape: const CircleBorder(),
+                  child: IconButton(
+                    tooltip: 'Centre on me',
+                    icon: const Icon(Icons.my_location, size: 22, color: AppColors.ink),
+                    onPressed: _centreOnMe,
+                  ),
+                ),
+              ),
             if (widget.controls)
               Positioned(
               right: 12,

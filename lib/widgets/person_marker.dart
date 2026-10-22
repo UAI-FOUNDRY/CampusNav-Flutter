@@ -1,21 +1,31 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../theme/destination_style.dart';
 
 /// "You are here": your person icon on a coloured disc with a soft halo,
 /// like the blue dot in Google Maps. The icon is assets/icons/person.png.
+///
+/// With [facing] (radians, clockwise from the top of the screen) a beam
+/// shows which way the phone points, like Google Maps' blue cone.
 class PersonMarker extends StatelessWidget {
   final Color color;
   final double size;
+  final double? facing;
 
-  const PersonMarker({super.key, required this.color, this.size = 36});
+  const PersonMarker({super.key, required this.color, this.size = 36, this.facing});
 
   /// The marker is bigger than the disc because of the halo.
   double get outerSize => size * 1.6;
 
+  /// Room needed when the beam is shown.
+  double get beamSize => size * 2.7;
+
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    final f = facing;
+    final disc = SizedBox(
       width: outerSize,
       height: outerSize,
       child: Stack(
@@ -53,5 +63,47 @@ class PersonMarker extends StatelessWidget {
         ],
       ),
     );
+    if (f == null) return disc;
+    return SizedBox(
+      width: beamSize,
+      height: beamSize,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(painter: _BeamPainter(color: color, angle: f)),
+            ),
+          ),
+          disc,
+        ],
+      ),
+    );
   }
+}
+
+/// A soft wedge from the centre towards [angle].
+class _BeamPainter extends CustomPainter {
+  final Color color;
+  final double angle; // radians, clockwise from up
+
+  const _BeamPainter({required this.color, required this.angle});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2;
+    const half = 35 * math.pi / 180;
+    // Canvas angles start at "right" (east); "up" is -pi/2.
+    final start = angle - math.pi / 2 - half;
+    final rect = Rect.fromCircle(center: c, radius: r);
+    final paint = Paint()
+      ..shader = RadialGradient(
+        colors: [color.withValues(alpha: 0.45), color.withValues(alpha: 0.0)],
+      ).createShader(rect);
+    canvas.drawArc(rect, start, 2 * half, true, paint);
+  }
+
+  @override
+  bool shouldRepaint(_BeamPainter old) => old.angle != angle || old.color != color;
 }

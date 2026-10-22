@@ -66,6 +66,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Your location is used to start routes where you are and to follow you along the route while you navigate.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Steps, turns and air pressure are used to follow you inside buildings and to tell which floor you are on.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera is used to scan campus QR codes that set your location.</string>
 </dict>
