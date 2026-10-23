@@ -25,7 +25,7 @@ class CampusNavApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Campus Navigation',
+      title: 'UAI Navigation', // the name in the recent-apps screen
       theme: AppTheme.light(),
       // Over every screen: a note while the server wakes up.
       builder: (context, child) => Stack(

@@ -16,7 +16,7 @@
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false"/>
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false"/>
     <application
-        android:label="campus_navigation"
+        android:label="UAI Navigation"
         android:usesCleartextTraffic="true"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

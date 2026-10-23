@@ -1,11 +1,11 @@
 {
-    "name": "campus_navigation",
-    "short_name": "campus_navigation",
+    "name": "UAI Navigation",
+    "short_name": "UAI Navigation",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FFFFFF",
+    "theme_color": "#2457E6",
+    "description": "Find your way around Universal AI University, Karjat.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
