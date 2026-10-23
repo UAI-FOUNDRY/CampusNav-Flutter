@@ -5,6 +5,9 @@ import 'package:campus_navigation/services/api_service.dart';
 import 'package:campus_navigation/main.dart';
 
 void main() {
+  // These tests use the built-in demo data (the app uses the live backend).
+  setUpAll(() => ApiService.useMock = true);
+
   test('route from the gate to the AI Lab walks, goes inside and takes the stairs', () {
     final route = MockCampus.buildRoute(startId: 'gate_main', destinationId: 'ai_lab');
 

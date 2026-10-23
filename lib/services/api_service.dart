@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -52,21 +53,77 @@ class ApiException implements Exception {
 ///
 /// Run against demo data (default):
 ///   flutter run
-/// Run against Flask:
-///   flutter run --dart-define=USE_MOCK=false --dart-define=API_BASE_URL=http://192.168.1.10:5000
+/// By default the app uses the backend deployed on Render. Other choices:
+///   flutter run --dart-define=USE_MOCK=true          (built-in demo data, no backend)
+///   flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5000   (Flask on your laptop;
+///       the Android emulator reaches the laptop as http://10.0.2.2:5000)
 class ApiService {
   const ApiService();
 
-  /// 10.0.2.2 is how the Android emulator reaches your laptop.
-  /// On a real phone use your laptop's Wi-Fi IP address instead.
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:5000',
+    defaultValue: 'https://campus-nav-api-mokr.onrender.com',
   );
 
-  static const bool useMock = bool.fromEnvironment('USE_MOCK', defaultValue: true);
+  /// Demo data instead of the backend (--dart-define=USE_MOCK=true). Not a
+  /// constant only so tests can switch it on.
+  static bool useMock = const bool.fromEnvironment('USE_MOCK', defaultValue: false);
 
   static const Duration _timeout = Duration(seconds: 8);
+
+  // ---- waking the server
+  //
+  // The free Render server sleeps after 15 minutes without requests and takes
+  // up to about a minute to wake. [wakeUp] (called when the app opens) pings
+  // it; requests made meanwhile wait for the ping instead of failing after
+  // 8 s, and [waking] lets the app say what is going on.
+
+  /// True while the server is being woken and it is taking a while.
+  static final ValueNotifier<bool> waking = ValueNotifier<bool>(false);
+  static Future<void>? _wake;
+  static bool _awake = false;
+  static DateTime? _lastAnswer;
+
+  /// Wakes the server if it may be asleep. Safe to call often: resolves at
+  /// once while it is known to be awake.
+  static Future<void> wakeUp() {
+    if (useMock) return Future<void>.value();
+    final last = _lastAnswer;
+    // Answered within the last 10 minutes: still awake.
+    if (_awake && last != null && DateTime.now().difference(last) < const Duration(minutes: 10)) {
+      return Future<void>.value();
+    }
+    return _wake ??= _ping().whenComplete(() => _wake = null);
+  }
+
+  static Future<void> _ping() async {
+    // Only say "waking" if it is not answering straight away.
+    final slow = Timer(const Duration(seconds: 3), () => waking.value = true);
+    final until = DateTime.now().add(const Duration(seconds: 75));
+    _awake = false;
+    try {
+      while (DateTime.now().isBefore(until)) {
+        final left = until.difference(DateTime.now());
+        try {
+          final r = await http.get(Uri.parse('$baseUrl/api/health')).timeout(left);
+          if (r.statusCode < 500) {
+            _awake = true;
+            _lastAnswer = DateTime.now();
+            return;
+          }
+          // 502/503 while the server starts: ask again shortly.
+          await Future<void>.delayed(const Duration(seconds: 3));
+        } on TimeoutException {
+          return;
+        } catch (_) {
+          return; // offline: the request itself will say so
+        }
+      }
+    } finally {
+      slow.cancel();
+      waking.value = false;
+    }
+  }
 
   /// Search places. An empty query returns every place.
   ///
@@ -85,7 +142,7 @@ class ApiService {
 
     final uri = Uri.parse('$baseUrl/api/rooms')
         .replace(queryParameters: {'q': query, 'limit': '50'});
-    return _placesFrom(await _send(http.get(uri)));
+    return _placesFrom(await _send(() => http.get(uri)));
   }
 
   static CampusCatalog? _catalog;
@@ -125,11 +182,11 @@ class ApiService {
       // Older backend: the first 50 places and the floors endpoint.
       final uri = Uri.parse('$baseUrl/api/rooms')
           .replace(queryParameters: {'q': '', 'limit': '50'});
-      final places = _placesFrom(await _send(http.get(uri)));
+      final places = _placesFrom(await _send(() => http.get(uri)));
       var floors = FloorInfo.fallback;
       try {
         floors = _floorsFrom(
-            await _send(http.get(Uri.parse('$baseUrl/api/floors'))));
+            await _send(() => http.get(Uri.parse('$baseUrl/api/floors'))));
       } on ApiException {
         // Keep the bundled list.
       }
@@ -159,6 +216,13 @@ class ApiService {
     }
     final savedBody = prefs?.getString(_graphKey);
     final savedTag = prefs?.getString(_graphTagKey);
+    // The first time ever the map is needed: wait for a sleeping server.
+    // With a saved map, don't: browse the saved one while it wakes.
+    if (savedBody == null) {
+      await wakeUp();
+    } else {
+      unawaited(wakeUp());
+    }
 
     http.Response response;
     try {
@@ -366,7 +430,7 @@ class ApiService {
       'to': destination,
       if (stepFree) 'accessible': '1',
     });
-    final data = await _send(http.get(uri));
+    final data = await _send(() => http.get(uri));
     if (data is! Map) {
       throw const ApiException('The server sent data the app could not read.');
     }
@@ -397,7 +461,7 @@ class ApiService {
       return result;
     }
 
-    final data = await _send(http.post(
+    final data = await _send(() => http.post(
       Uri.parse('$baseUrl/api/estimates'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'start': start, 'destinations': destinations}),
@@ -425,7 +489,7 @@ class ApiService {
       await Future.delayed(const Duration(milliseconds: 600));
       return;
     }
-    await _send(http.post(
+    await _send(() => http.post(
       Uri.parse('$baseUrl/api/report'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
@@ -439,9 +503,11 @@ class ApiService {
 
   /// Runs a request with a timeout and turns every failure into an
   /// [ApiException] the UI can show.
-  Future<dynamic> _send(Future<http.Response> request, {Duration? timeout}) async {
+  Future<dynamic> _send(Future<http.Response> Function() request, {Duration? timeout}) async {
+    await wakeUp(); // a sleeping server: wait for it rather than time out
     try {
-      final response = await request.timeout(timeout ?? _timeout);
+      final response = await request().timeout(timeout ?? _timeout);
+      _lastAnswer = DateTime.now();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw _errorFrom(response);
       }

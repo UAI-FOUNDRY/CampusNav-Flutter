@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:campus_navigation/models/route.dart';
 import 'package:campus_navigation/models/start_point.dart';
+import 'package:campus_navigation/services/api_service.dart';
 import 'package:campus_navigation/services/floor_barometer.dart';
 import 'package:campus_navigation/services/live_guide.dart';
 import 'package:campus_navigation/services/motion_sensors.dart';
@@ -23,6 +24,9 @@ NavigationRoute fixture(String name) {
 }
 
 void main() {
+  // No network in tests (shared Wi-Fi fingerprints, weather ...).
+  setUpAll(() => ApiService.useMock = true);
+
   group('route geometry', () {
     test('the whole route: outside, inside, and the stairs between floors', () {
       final route = fixture('route_gate_innovation_lab');

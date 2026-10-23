@@ -88,7 +88,7 @@ Every phone uses the best sensor it has, and they back each other up:
 - [x] Indoor guidance by Next or scanning a sign, floor-change cards
 - [x] Offline cache of the campus map, deep links
 - [x] Accessibility pass (TalkBack labels, touch targets, reduce motion)
-- [ ] Backend deployed online (it runs on a laptop for now; see below)
+- [x] Backend deployed online (Render, free plan)
 - [ ] Dark mode
 - [x] Indoor positioning without QR codes (steps, turns, barometer floors, Wi-Fi fingerprints learned from confirmed spots)
 
@@ -96,18 +96,28 @@ Every phone uses the best sensor it has, and they back each other up:
 
 ## Running the app
 
-Demo mode (default). No backend needed; the app uses built-in demo data:
+The app uses the backend deployed on Render (`https://campus-nav-api-mokr.onrender.com`) by default:
 
 ```bash
 flutter pub get
 flutter run
+flutter build apk --release      # build/app/outputs/flutter-apk/app-release.apk, to share
 ```
 
-Against the Flask backend:
+The free Render server sleeps after 15 minutes without use and needs up to a minute to wake. The app pings it when it
+opens and shows "Waking up the campus server" meanwhile; requests wait for it instead of failing. A saved campus map
+lets people browse during that minute.
+
+Demo mode (built-in demo data, no backend):
 
 ```bash
-flutter pub get
-flutter run --dart-define=USE_MOCK=false --dart-define=API_BASE_URL=http://<laptop-ip>:5000
+flutter run --dart-define=USE_MOCK=true
+```
+
+Against Flask on your laptop:
+
+```bash
+flutter run --dart-define=API_BASE_URL=http://<laptop-ip>:5000
 ```
 
 - Emulator: use `http://10.0.2.2:5000`
@@ -120,10 +130,11 @@ flutter run --dart-define=USE_MOCK=false --dart-define=API_BASE_URL=http://<lapt
 - **Location (while using the app):** "Use my location" and live guidance
 - **Wi-Fi state (Android):** "Use my location" compares the Wi-Fi networks around with fingerprints of known spots (needs location on, like any Wi-Fi scan)
 - **Motion & Fitness (iOS):** steps, turns and air pressure (`NSMotionUsageDescription`); Android needs no permission for these sensors
-- `android:usesCleartextTraffic="true"` allows plain `http://` to the laptop during development. Remove it once the backend runs on HTTPS.
+- `android:usesCleartextTraffic="true"` only matters for plain `http://` to a laptop backend; the Render backend is HTTPS. Remove it once nobody tests against a laptop.
 
 ### Testing live guidance
-GPS and the sensors need no network, but routes come from the backend. If the backend runs on the laptop:
+With the Render backend, just walk: routes and rerouting work anywhere on mobile data. GPS and the sensors need no
+network at all. If you test against a backend on your laptop instead:
 1. Open the route and tap **Start navigation** while still on the laptop's Wi-Fi.
 2. Turn on mobile data so the map background keeps loading.
 3. Walk. Following, steps, floors and arrival work without the laptop; only rerouting and new routes need it.
@@ -135,7 +146,6 @@ On the stairs, hold the phone as usual: the card shows the climb and closes on t
 barometer (some cheaper Android phones), the card closes once your steps have climbed the floors (or tap
 "I'm on floor N").
 
-Deploying the backend (the backend repo has a `render.yaml` for Render) removes this limit.
 
 ### Automated tests
 `flutter test` runs, among others, whole trips on real campus routes (`test/fixtures`), with the sensors replayed as a
@@ -241,7 +251,7 @@ on every simulated ride.
 - GPS alone cannot name a room indoors: "Use my location" asks there until the Wi-Fi has learned the room (Android). iPhones cannot scan Wi-Fi, so on iPhone it always asks indoors (scan a sign for an exact start)
 - The exact floor needs a recent reference (outside next to the building, the door, a ride, a sign or a picked spot), corrected for the weather with the free Open-Meteo forecast. Floor *changes* on the route's stairs / lift need no reference
 - Phones without a barometer count stair steps and feel lift rides instead, which closes the floor card less promptly; the "I'm on floor N" button is always there. Without a gyroscope, turns come from the magnetic compass, which steel and wiring indoors can bend, so corners are matched less reliably
-- The backend runs on a laptop: rerouting and new routes need the phone to reach it
+- The backend is on Render's free plan: it sleeps after 15 minutes idle (about a minute to wake), and its disk is wiped on every restart, so Wi-Fi fingerprints and problem reports sent to it do not last (see the backend's docs/api.md)
 - Map tiles (Esri World Imagery, OpenStreetMap) are free for light use with attribution; check their terms or use a keyed provider before a public launch
 - Demo mode's schematic map is not part of the live app and has not had the accessibility pass
 
