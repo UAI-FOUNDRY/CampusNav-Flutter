@@ -126,20 +126,28 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? const SizedBox(width: double.infinity)
                 : Padding(
                     padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: AppColors.academic,
-                            borderRadius: BorderRadius.circular(11),
+                    // The university's logo, a hairline, then "Navigation":
+                    // read together as "UAI Navigation".
+                    child: Semantics(
+                      header: true,
+                      label: 'UAI Navigation',
+                      excludeSemantics: true,
+                      child: Row(
+                        children: [
+                          Image.asset(
+                            'assets/brand/uai_logo.png',
+                            height: 34,
+                            filterQuality: FilterQuality.medium,
                           ),
-                          child: const Icon(Icons.navigation, size: 20, color: Colors.white),
-                        ),
-                        const SizedBox(width: 12),
-                        Text('UAI Navigation', style: text.headlineSmall),
-                      ],
+                          Container(
+                            width: 1.5,
+                            height: 26,
+                            margin: const EdgeInsets.symmetric(horizontal: 12),
+                            color: AppColors.mist,
+                          ),
+                          Text('Navigation', style: text.headlineSmall),
+                        ],
+                      ),
                     ),
                   ),
           ),
