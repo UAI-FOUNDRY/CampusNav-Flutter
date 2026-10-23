@@ -501,7 +501,24 @@ class _NavigationScreenState extends State<NavigationScreen>
     showSensorSheet(context, guide: g);
   }
 
-  /// The round button next to Next: sensors, scan a sign, or pause.
+  /// "Report a problem" for this route; during guidance it says which step.
+  void _report() {
+    final route = _route;
+    String? step;
+    if (_guiding && route != null && _stepIndex < route.steps.length) {
+      final s = route.steps[_stepIndex];
+      step = s.instruction.isNotEmpty ? s.instruction : s.title;
+    }
+    showReportSheet(
+      context,
+      destination: widget.destination,
+      start: _start,
+      step: step,
+      stepFree: _stepFree,
+    );
+  }
+
+  /// The round button next to Next: sensors, scan a sign, pause, report.
   Future<void> _guideMenu(LiveGuide g) async {
     HapticFeedback.selectionClick();
     final choice = await showModalBottomSheet<String>(
@@ -539,6 +556,12 @@ class _NavigationScreenState extends State<NavigationScreen>
                   subtitle: const Text('Then you move on with Next'),
                   onTap: () => Navigator.of(context).pop('pause'),
                 ),
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: const Text('Report a problem here'),
+                  subtitle: const Text('A wrong turn, a locked door, a blocked path ...'),
+                  onTap: () => Navigator.of(context).pop('report'),
+                ),
               ],
             ),
           ),
@@ -554,6 +577,8 @@ class _NavigationScreenState extends State<NavigationScreen>
       case 'pause':
         g.setPaused(true);
         _toast('Auto-follow paused. Tap the round button to follow you again.');
+      case 'report':
+        _report();
     }
   }
 
@@ -725,11 +750,7 @@ class _NavigationScreenState extends State<NavigationScreen>
           IconButton(
             tooltip: 'Report a problem',
             icon: const Icon(Icons.flag_outlined),
-            onPressed: () => showReportSheet(
-              context,
-              destination: widget.destination,
-              start: _start,
-            ),
+            onPressed: _report,
           ),
           const SizedBox(width: 4),
         ],

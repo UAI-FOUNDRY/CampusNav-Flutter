@@ -479,26 +479,93 @@ class ApiService {
 
   /// POST /api/report   {"start", "destination", "reason", "details"}
   /// Lets a student say a route or location is wrong.
-  Future<void> reportProblem({
+  /// "Report a problem": the backend files it for the team (a GitHub issue).
+  /// [step]: the instruction being followed when it went wrong, if any.
+  ///
+  /// Returns true when it was sent, false when the phone is offline: then it
+  /// is kept on the phone and sent later ([sendPendingReports]). Other
+  /// failures throw an [ApiException] to show.
+  Future<bool> reportProblem({
     required String start,
     required String destination,
     required String reason,
     String details = '',
+    String? step,
+    bool stepFree = false,
   }) async {
+    final report = <String, dynamic>{
+      'start': start,
+      'destination': destination,
+      'reason': reason,
+      'details': details,
+      if (step != null && step.isNotEmpty) 'step': step,
+      if (stepFree) 'step_free': true,
+    };
     if (useMock) {
       await Future.delayed(const Duration(milliseconds: 600));
-      return;
+      return true;
     }
-    await _send(() => http.post(
-      Uri.parse('$baseUrl/api/report'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'start': start,
-        'destination': destination,
-        'reason': reason,
-        'details': details,
-      }),
-    ));
+    try {
+      await _postReport(report);
+      unawaited(sendPendingReports()); // online again: older ones too
+      return true;
+    } on ApiException catch (e) {
+      if (e.kind != ApiErrorKind.offline && e.kind != ApiErrorKind.timeout) rethrow;
+      await _queueReport(report);
+      return false;
+    }
+  }
+
+  Future<void> _postReport(Map<String, dynamic> report) => _send(() => http.post(
+        Uri.parse('$baseUrl/api/report'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(report),
+      ));
+
+  static const _pendingKey = 'reports.pending';
+  static const _maxPending = 20;
+  static bool _sendingPending = false;
+
+  Future<void> _queueReport(Map<String, dynamic> report) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_pendingKey) ?? <String>[];
+      list.add(jsonEncode(report));
+      while (list.length > _maxPending) {
+        list.removeAt(0); // keep the newest
+      }
+      await prefs.setStringList(_pendingKey, list);
+    } catch (_) {
+      // No storage: nothing more to do.
+    }
+  }
+
+  /// Sends the reports kept while offline (called when the app opens and
+  /// after a report goes through). Stops at the first one that still cannot
+  /// get through; drops one the server refuses, so none is stuck for ever.
+  static Future<void> sendPendingReports() async {
+    if (useMock || _sendingPending) return;
+    _sendingPending = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var list = prefs.getStringList(_pendingKey) ?? <String>[];
+      while (list.isNotEmpty) {
+        try {
+          final report = jsonDecode(list.first);
+          if (report is Map<String, dynamic>) await const ApiService()._postReport(report);
+        } on ApiException catch (e) {
+          if (e.kind == ApiErrorKind.offline || e.kind == ApiErrorKind.timeout) break;
+        } catch (_) {
+          // Unreadable: drop it.
+        }
+        list = list.sublist(1);
+        await prefs.setStringList(_pendingKey, list);
+      }
+    } catch (_) {
+      // Storage unavailable: try again next time.
+    } finally {
+      _sendingPending = false;
+    }
   }
 
   /// Runs a request with a timeout and turns every failure into an

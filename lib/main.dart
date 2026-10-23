@@ -15,6 +15,7 @@ Future<void> main() async {
   // while the app reads its saved data.
   unawaited(ApiService.wakeUp());
   await AppState.load(); // read saved places and settings before the first screen
+  unawaited(ApiService.sendPendingReports()); // reports made while offline
   runApp(const CampusNavApp());
 }
 

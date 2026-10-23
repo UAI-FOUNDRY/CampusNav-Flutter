@@ -4,12 +4,16 @@ import '../models/start_point.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 
-/// "Report a problem" sheet. Useful during testing: every report tells you
-/// which route or location in the campus data needs fixing.
+/// "Report a problem" sheet. Every report reaches the team (a GitHub issue
+/// in the backend repo) with the route and, during guidance, the step you
+/// were on, so they know what in the campus data to fix. Offline, it is kept
+/// on the phone and sent later.
 Future<void> showReportSheet(
   BuildContext context, {
   required Destination destination,
   required StartPoint start,
+  String? step,
+  bool stepFree = false,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -18,7 +22,7 @@ Future<void> showReportSheet(
     builder: (sheetContext) => Padding(
       // Lift the sheet above the keyboard.
       padding: EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
-      child: _ReportSheet(destination: destination, start: start),
+      child: _ReportSheet(destination: destination, start: start, step: step, stepFree: stepFree),
     ),
   );
 }
@@ -26,8 +30,10 @@ Future<void> showReportSheet(
 class _ReportSheet extends StatefulWidget {
   final Destination destination;
   final StartPoint start;
+  final String? step;
+  final bool stepFree;
 
-  const _ReportSheet({required this.destination, required this.start});
+  const _ReportSheet({required this.destination, required this.start, this.step, this.stepFree = false});
 
   @override
   State<_ReportSheet> createState() => _ReportSheetState();
@@ -63,16 +69,22 @@ class _ReportSheetState extends State<_ReportSheet> {
     });
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await const ApiService().reportProblem(
+      final sent = await const ApiService().reportProblem(
         start: widget.start.id,
         destination: widget.destination.id,
         reason: _reasons[reason],
         details: _details.text.trim(),
+        step: widget.step,
+        stepFree: widget.stepFree,
       );
       if (!mounted) return;
       Navigator.of(context).pop();
       messenger.showSnackBar(
-        const SnackBar(content: Text('Thanks. We will check this route.')),
+        SnackBar(
+          content: Text(sent
+              ? 'Thanks. The campus team will check this route.'
+              : "You're offline. The report is saved and will be sent when you're back online."),
+        ),
       );
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -98,6 +110,15 @@ class _ReportSheetState extends State<_ReportSheet> {
             'Route to ${widget.destination.name}, from ${widget.start.name}',
             style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
           ),
+          if (widget.step != null && widget.step!.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              'At: ${widget.step}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
+            ),
+          ],
           const SizedBox(height: 16),
           Wrap(
             spacing: 8,
@@ -115,7 +136,11 @@ class _ReportSheetState extends State<_ReportSheet> {
           TextField(
             controller: _details,
             maxLines: 3,
-            decoration: const InputDecoration(hintText: 'Add details (optional)'),
+            decoration: const InputDecoration(
+              hintText: 'Add details (optional)',
+              helperText: 'Please do not add names or phone numbers: the team can read every report.',
+              helperMaxLines: 2,
+            ),
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
